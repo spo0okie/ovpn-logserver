@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+
+{% block title %}{{ account.cn or 'Account' }} - Account Details - OpenVPN LogServer{% endblock %}
+
+{% block content %}
+<!-- Навигация -->
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/accounts">Accounts</a></li>
+        <li class="breadcrumb-item active">{{ account.cn or cn }}</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>
+        <i class="bi bi-person-circle"></i> {{ account.cn or cn }}
+        {% if account.is_revoked %}
+            <span class="badge badge-revoked">Revoked</span>
+        {% elif account.can_connect is defined and not account.can_connect %}
+            <span class="badge bg-warning text-dark">Expired</span>
+        {% elif account.can_connect is defined %}
+            <span class="badge bg-success">Active</span>
+        {% endif %}
+    </h1>
+    <a href="/accounts" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back to Accounts
+    </a>
+</div>
+
+<div class="row">
+    <!-- Информация об аккаунте -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <i class="bi bi-info-circle"></i> Account Information
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless">
+                    <tr>
+                        <td class="text-muted">ID:</td>
+                        <td>{% if account.id %}<code>#{{ account.id }}</code>{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Common Name:</td>
+                        <td><strong>{{ account.cn or cn }}</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Status:</td>
+                        <td>
+                            {% if account.is_revoked is defined %}
+                                {% if account.is_revoked %}
+                                    <span class="badge badge-revoked">Revoked</span>
+                                    {% if account.revoked_at %}
+                                        <small class="text-muted d-block">{{ account.revoked_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="badge bg-success">Active</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">CCD File:</td>
+                        <td>
+                            {% if account.has_ccd is defined %}
+                                {% if account.has_ccd %}
+                                    <span class="badge bg-info"><i class="bi bi-check"></i> Present</span>
+                                {% else %}
+                                    <span class="badge bg-secondary"><i class="bi bi-x"></i> Missing</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Can Connect:</td>
+                        <td>
+                            {% if account.can_connect is defined %}
+                                {% if account.can_connect %}
+                                    <span class="text-success"><i class="bi bi-check-circle"></i> Yes</span>
+                                {% else %}
+                                    <span class="text-danger"><i class="bi bi-x-circle"></i> No</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Created:</td>
+                        <td>{% if account.created_at %}{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Updated:</td>
+                        <td>{% if account.updated_at %}{{ account.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Информация о сертификате -->
+        <div class="card">
+            <div class="card-header bg-info text-white">
+                <i class="bi bi-file-lock"></i> Certificate
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless">
+                    <tr>
+                        <td class="text-muted">Valid From:</td>
+                        <td>
+                            {% if account.valid_from %}
+                                {{ account.valid_from.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Valid To:</td>
+                        <td>
+                            {% if account.valid_to %}
+                                {% if account.valid_to < now %}
+                                    <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
+                                {% else %}
+                                    {{ account.valid_to.strftime('%Y-%m-%d') }}
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Последняя сессия -->
+    <div class="col-md-8">
+        {% if account.last_session is defined and account.last_session %}
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+                <i class="bi bi-broadcast"></i> Last Session
+                {% if account.last_session.is_active %}
+                    <span class="badge bg-warning text-dark float-end">ACTIVE NOW</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr>
+                                <td class="text-muted">Status:</td>
+                                <td>
+                                    {% if account.last_session.is_active %}
+                                        <span class="badge badge-active">Active</span>
+                                    {% else %}
+                                        <span class="badge badge-closed">Closed</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Connected:</td>
+                                <td>{{ account.last_session.connected_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            </tr>
+                            {% if account.last_session.disconnected_at %}
+                            <tr>
+                                <td class="text-muted">Disconnected:</td>
+                                <td>{{ account.last_session.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            </tr>
+                            {% endif %}
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr>
+                                <td class="text-muted">Source IP:</td>
+                                <td><code>{{ account.last_session.source_ip }}</code></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted">Location:</td>
+                                <td>
+                                    {% if account.last_session.country %}
+                                        <i class="bi bi-geo-alt"></i> 
+                                        {{ account.last_session.country }}
+                                        {% if account.last_session.city %}
+                                            , {{ account.last_session.city }}
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">Unknown</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle"></i> No sessions recorded for this account.
+        </div>
+        {% endif %}
+        
+        <!-- История сессий -->
+        <div class="card">
+            <div class="card-header bg-secondary text-white">
+                <i class="bi bi-clock-history"></i> Session History
+                <span class="badge bg-light text-dark float-end">{{ sessions.meta.total }} total</span>
+            </div>
+            <div class="card-body">
+                {% if sessions.data %}
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm">
+                        <thead>
+                            <tr>
+                                <th>Connected</th>
+                                <th>Duration</th>
+                                <th>Source IP</th>
+                                <th>Location</th>
+                                <th>Status</th>
+                                <th>Traffic</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for session in sessions.data %}
+                            <tr>
+                                <td>{{ session.connected_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                                <td>
+                                    {% if session.duration_seconds %}
+                                        {% set hours = session.duration_seconds // 3600 %}
+                                        {% set minutes = (session.duration_seconds % 3600) // 60 %}
+                                        {% if hours > 0 %}
+                                            {{ hours }}h {{ minutes }}m
+                                        {% else %}
+                                            {{ minutes }}m
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td><code>{{ session.source_ip }}</code></td>
+                                <td>
+                                    {% if session.country %}
+                                        {{ session.country }}{% if session.city %}, {{ session.city }}{% endif %}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if session.status == 'active' %}
+                                        <span class="badge badge-active">Active</span>
+                                    {% else %}
+                                        <span class="badge badge-closed">Closed</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">
+                                        <i class="bi bi-arrow-up"></i> {{ (session.bytes_sent / 1024 / 1024) | round(2) }} MB<br>
+                                        <i class="bi bi-arrow-down"></i> {{ (session.bytes_received / 1024 / 1024) | round(2) }} MB
+                                    </small>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Пагинация сессий -->
+                {% if sessions.meta.total_pages > 1 %}
+                <nav aria-label="Session pagination" class="mt-3">
+                    <ul class="pagination pagination-sm justify-content-center">
+                        {% if sessions.meta.page > 1 %}
+                        <li class="page-item">
+                            <a class="page-link" href="/accounts/{{ account.cn }}?page={{ sessions.meta.page - 1 }}&per_page={{ sessions.meta.per_page }}">
+                                <i class="bi bi-chevron-left"></i>
+                            </a>
+                        </li>
+                        {% endif %}
+                        
+                        {% for p in range(1, sessions.meta.total_pages + 1) %}
+                            {% if p == sessions.meta.page %}
+                                <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                            {% elif p <= 3 or p > sessions.meta.total_pages - 3 or (p >= sessions.meta.page - 1 and p <= sessions.meta.page + 1) %}
+                                <li class="page-item">
+                                    <a class="page-link" href="/accounts/{{ account.cn }}?page={{ p }}&per_page={{ sessions.meta.per_page }}">{{ p }}</a>
+                                </li>
+                            {% elif p == 4 or p == sessions.meta.total_pages - 3 %}
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            {% endif %}
+                        {% endfor %}
+                        
+                        {% if sessions.meta.page < sessions.meta.total_pages %}
+                        <li class="page-item">
+                            <a class="page-link" href="/accounts/{{ account.cn }}?page={{ sessions.meta.page + 1 }}&per_page={{ sessions.meta.per_page }}">
+                                <i class="bi bi-chevron-right"></i>
+                            </a>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                {% endif %}
+                
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1"></i>
+                    <p class="mt-2">No session history</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - OpenVPN LogServer{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-speedometer2"></i> Dashboard</h1>
+    <span class="text-muted">Overview of your OpenVPN infrastructure</span>
+</div>
+
+<!-- Статистика аккаунтов -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h5 class="text-muted mb-3">
+            <i class="bi bi-people"></i> Accounts
+        </h5>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">Total Accounts</h6>
+                        <h2 class="mb-0">{{ stats.accounts.total }}</h2>
+                    </div>
+                    <i class="bi bi-people-fill fs-1 opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">Active Certs</h6>
+                        <h2 class="mb-0">{{ stats.accounts.active_certs }}</h2>
+                    </div>
+                    <i class="bi bi-check-circle-fill fs-1 opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card bg-danger text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">Revoked</h6>
+                        <h2 class="mb-0">{{ stats.accounts.revoked }}</h2>
+                    </div>
+                    <i class="bi bi-x-circle-fill fs-1 opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card bg-info text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">With CCD</h6>
+                        <h2 class="mb-0">{{ stats.accounts.with_ccd }}</h2>
+                    </div>
+                    <i class="bi bi-file-text-fill fs-1 opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Статистика сессий -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h5 class="text-muted mb-3">
+            <i class="bi bi-diagram-3"></i> Sessions
+        </h5>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card border-success">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title text-success">Active Now</h6>
+                        <h2 class="mb-0 text-success">{{ stats.sessions.active }}</h2>
+                    </div>
+                    <i class="bi bi-broadcast fs-1 text-success opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title text-muted">Today</h6>
+                        <h2 class="mb-0">{{ stats.sessions.today }}</h2>
+                    </div>
+                    <i class="bi bi-calendar-day fs-1 text-muted opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title text-muted">This Week</h6>
+                        <h2 class="mb-0">{{ stats.sessions.this_week }}</h2>
+                    </div>
+                    <i class="bi bi-calendar-week fs-1 text-muted opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title text-muted">This Month</h6>
+                        <h2 class="mb-0">{{ stats.sessions.this_month }}</h2>
+                    </div>
+                    <i class="bi bi-calendar-month fs-1 text-muted opacity-50"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Предупреждения и активные сессии -->
+<div class="row">
+    <!-- Предупреждения -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-warning text-dark">
+                <i class="bi bi-exclamation-triangle"></i> Warnings
+            </div>
+            <div class="card-body">
+                {% if stats.accounts.expiring_soon > 0 %}
+                    <div class="alert alert-warning mb-2">
+                        <i class="bi bi-clock"></i> 
+                        <strong>{{ stats.accounts.expiring_soon }}</strong> certificates expiring soon
+                    </div>
+                {% endif %}
+                
+                {% if stats.attempts.failed_today > 0 %}
+                    <div class="alert alert-danger mb-2">
+                        <i class="bi bi-x-octagon"></i> 
+                        <strong>{{ stats.attempts.failed_today }}</strong> failed attempts today
+                    </div>
+                {% endif %}
+                
+                {% if stats.accounts.expiring_soon == 0 and stats.attempts.failed_today == 0 %}
+                    <div class="alert alert-success mb-0">
+                        <i class="bi bi-check-circle"></i> No warnings
+                    </div>
+                {% endif %}
+                
+                <div class="mt-3">
+                    <a href="/attempts" class="btn btn-sm btn-outline-danger">
+                        <i class="bi bi-eye"></i> View Failed Attempts
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Быстрые ссылки -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-info text-white">
+                <i class="bi bi-lightning"></i> Quick Links
+            </div>
+            <div class="card-body">
+                <div class="list-group list-group-flush">
+                    <a href="/accounts" class="list-group-item list-group-item-action">
+                        <i class="bi bi-people"></i> Manage Accounts
+                        <span class="badge bg-primary rounded-pill float-end">{{ stats.accounts.total }}</span>
+                    </a>
+                    <a href="/sessions" class="list-group-item list-group-item-action">
+                        <i class="bi bi-diagram-3"></i> View Sessions
+                        <span class="badge bg-success rounded-pill float-end">{{ stats.sessions.active }} active</span>
+                    </a>
+                    <a href="/attempts" class="list-group-item list-group-item-action">
+                        <i class="bi bi-exclamation-triangle"></i> Failed Attempts
+                        <span class="badge bg-danger rounded-pill float-end">{{ stats.attempts.failed_today }} today</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Статус системы -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-secondary text-white">
+                <i class="bi bi-gear"></i> System Status
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless">
+                    <tr>
+                        <td><i class="bi bi-check-circle text-success"></i> API Status</td>
+                        <td class="text-end"><span class="badge bg-success">Online</span></td>
+                    </tr>
+                    <tr>
+                        <td><i class="bi bi-hdd text-success"></i> Database</td>
+                        <td class="text-end"><span class="badge bg-success">Connected</span></td>
+                    </tr>
+                    <tr>
+                        <td><i class="bi bi-clock text-info"></i> Last Updated</td>
+                        <td class="text-end"><small class="text-muted">{{ now }}</small></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

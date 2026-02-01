@@ -1,0 +1,142 @@
+# =============================================================================
+# Docker Compose конфигурация для OpenVPN LogServer.
+# =============================================================================
+# Сервисы:
+# - mysql: База данных MySQL 8.0
+# - openvpn-server: Сервер OpenVPN с генерацией PKI
+# - openvpn-client: Клиент OpenVPN для тестирования
+# - web: FastAPI приложение
+#
+# Инварианты:
+# - I9.1: docker-compose up поднимает все сервисы
+# - I9.2: OpenVPN сервер генерирует PKI при первом запуске
+# - I9.3: Клиент может подключиться к серверу
+# - I9.4: При подключении создается запись в БД
+# - I9.5: При отключении сессия закрывается
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # MySQL база данных
+  mysql:
+    image: mysql:8.0
+    container_name: openvpn-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openvpn_logs}
+      MYSQL_USER: ${MYSQL_USER:-openvpn}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-openvpn_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - openvpn-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # OpenVPN сервер
+  openvpn-server:
+    build:
+      context: ../
+      dockerfile: docker/openvpn-server/Dockerfile
+    container_name: openvpn-server
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+    ports:
+      - "1194:1194/udp"
+    volumes:
+      - openvpn_pki:/etc/openvpn/pki
+      - openvpn_ccd:/etc/openvpn/ccd
+      - openvpn_certs:/etc/openvpn/certs
+    networks:
+      - openvpn-network
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-openvpn}:${MYSQL_PASSWORD:-openvpn_password}@mysql:3306/${MYSQL_DATABASE:-openvpn_logs}
+      - OPENVPN_DIR=/etc/openvpn
+      - CERTS_DIR=/etc/openvpn/certs
+      - CRL_FILE=/etc/openvpn/pki/crl.pem
+      - CCD_DIR=/etc/openvpn/ccd
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "openvpn"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # OpenVPN клиент (для тестирования)
+  openvpn-client:
+    build:
+      context: ../
+      dockerfile: docker/openvpn-client/Dockerfile
+    container_name: openvpn-client
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      - openvpn-network
+    environment:
+      - OPENVPN_SERVER=openvpn-server
+      - OPENVPN_PORT=1194
+    depends_on:
+      - openvpn-server
+    profiles:
+      - client
+    command: ["sleep", "infinity"]
+
+  # Web приложение (FastAPI)
+  web:
+    build:
+      context: ../
+      dockerfile: docker/web/Dockerfile
+    container_name: openvpn-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-openvpn}:${MYSQL_PASSWORD:-openvpn_password}@mysql:3306/${MYSQL_DATABASE:-openvpn_logs}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+    networks:
+      - openvpn-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mysql_data:
+    driver: local
+  openvpn_pki:
+    driver: local
+  openvpn_ccd:
+    driver: local
+  openvpn_certs:
+    driver: local
+
+networks:
+  openvpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

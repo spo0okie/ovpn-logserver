@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Failed Attempts - OpenVPN LogServer{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-exclamation-triangle"></i> Failed Connection Attempts</h1>
+    <span class="text-muted">Total: {{ attempts.meta.total }}</span>
+</div>
+
+<!-- Фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" action="/attempts" class="row g-3">
+            <div class="col-md-3">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-person"></i></span>
+                    <input type="text" class="form-control" name="account" 
+                           placeholder="Account CN..." value="{{ account or '' }}">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-globe"></i></span>
+                    <input type="text" class="form-control" name="source_ip" 
+                           placeholder="Source IP..." value="{{ source_ip or '' }}">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <select class="form-select" name="failure_type">
+                    <option value="">All Failure Types</option>
+                    <option value="auth_failed" {% if failure_type == 'auth_failed' %}selected{% endif %}>Auth Failed</option>
+                    <option value="cert_revoked" {% if failure_type == 'cert_revoked' %}selected{% endif %}>Cert Revoked</option>
+                    <option value="cert_expired" {% if failure_type == 'cert_expired' %}selected{% endif %}>Cert Expired</option>
+                    <option value="ccd_missing" {% if failure_type == 'ccd_missing' %}selected{% endif %}>CCD Missing</option>
+                    <option value="ip_blocked" {% if failure_type == 'ip_blocked' %}selected{% endif %}>IP Blocked</option>
+                    <option value="other" {% if failure_type == 'other' %}selected{% endif %}>Other</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-funnel"></i> Filter
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Таблица попыток -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="attemptsTable">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Account</th>
+                        <th>Source IP</th>
+                        <th>Failure Type</th>
+                        <th>Reason</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for attempt in attempts.data %}
+                    <tr>
+                        <td>
+                            {{ attempt.attempted_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                            <br>
+                            <small class="text-muted">{{ attempt.attempted_at.strftime('%Z') }}</small>
+                        </td>
+                        <td>
+                            {% if attempt.account.cn %}
+                                <a href="/accounts/{{ attempt.account.cn }}" class="text-decoration-none">
+                                    <i class="bi bi-person-circle text-primary"></i> {{ attempt.account.cn }}
+                                </a>
+                                {% if attempt.account.prefix %}
+                                    <br><small class="text-muted">Prefix: {{ attempt.account.prefix }}</small>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">
+                                    <i class="bi bi-question-circle"></i> Unknown
+                                </span>
+                                {% if attempt.cert_cn %}
+                                    <br><small class="text-muted">CN: {{ attempt.cert_cn }}</small>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td><code>{{ attempt.source_ip }}</code></td>
+                        <td>
+                            {% set badge_colors = {
+                                'auth_failed': 'bg-danger',
+                                'cert_revoked': 'bg-dark',
+                                'cert_expired': 'bg-warning text-dark',
+                                'ccd_missing': 'bg-info',
+                                'ip_blocked': 'bg-secondary',
+                                'other': 'bg-light text-dark'
+                            } %}
+                            <span class="badge {{ badge_colors.get(attempt.failure_type, 'bg-secondary') }}">
+                                {{ attempt.failure_type.replace('_', ' ').title() }}
+                            </span>
+                        </td>
+                        <td>{{ attempt.failure_reason }}</td>
+                        <td>
+                            {% if attempt.details %}
+                                <small class="text-muted" title="{{ attempt.details }}">
+                                    {{ attempt.details[:50] }}{% if attempt.details|length > 50 %}...{% endif %}
+                                </small>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p class="mt-2">No failed attempts found</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Пагинация -->
+        {% if attempts.meta.total_pages > 1 %}
+        <nav aria-label="Page navigation">
+            <ul class="pagination justify-content-center">
+                {% if attempts.meta.page > 1 %}
+                <li class="page-item">
+                    <a class="page-link" href="/attempts?page={{ attempts.meta.page - 1 }}&per_page={{ attempts.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&failure_type={{ failure_type or '' }}">
+                        <i class="bi bi-chevron-left"></i> Previous
+                    </a>
+                </li>
+                {% endif %}
+                
+                {% for p in range(1, attempts.meta.total_pages + 1) %}
+                    {% if p == attempts.meta.page %}
+                        <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% elif p <= 3 or p > attempts.meta.total_pages - 3 or (p >= attempts.meta.page - 1 and p <= attempts.meta.page + 1) %}
+                        <li class="page-item">
+                            <a class="page-link" href="/attempts?page={{ p }}&per_page={{ attempts.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&failure_type={{ failure_type or '' }}">{{ p }}</a>
+                        </li>
+                    {% elif p == 4 or p == attempts.meta.total_pages - 3 %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if attempts.meta.page < attempts.meta.total_pages %}
+                <li class="page-item">
+                    <a class="page-link" href="/attempts?page={{ attempts.meta.page + 1 }}&per_page={{ attempts.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&failure_type={{ failure_type or '' }}">
+                        Next <i class="bi bi-chevron-right"></i>
+                    </a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        
+        <div class="text-center text-muted">
+            <small>Showing {{ ((attempts.meta.page - 1) * attempts.meta.per_page) + 1 }} - 
+                   {{ [attempts.meta.page * attempts.meta.per_page, attempts.meta.total] | min }} 
+                   of {{ attempts.meta.total }} attempts</small>
+        </div>
+    </div>
+</div>
+
+<!-- Легенда типов ошибок -->
+<div class="card mt-4">
+    <div class="card-header">
+        <i class="bi bi-info-circle"></i> Failure Types Legend
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <span class="badge bg-danger">Auth Failed</span>
+                <small class="text-muted"> - Authentication failure</small>
+            </div>
+            <div class="col-md-4">
+                <span class="badge bg-dark">Cert Revoked</span>
+                <small class="text-muted"> - Certificate has been revoked</small>
+            </div>
+            <div class="col-md-4">
+                <span class="badge bg-warning text-dark">Cert Expired</span>
+                <small class="text-muted"> - Certificate has expired</small>
+            </div>
+            <div class="col-md-4 mt-2">
+                <span class="badge bg-info">CCD Missing</span>
+                <small class="text-muted"> - CCD file not found</small>
+            </div>
+            <div class="col-md-4 mt-2">
+                <span class="badge bg-secondary">IP Blocked</span>
+                <small class="text-muted"> - Source IP is blocked</small>
+            </div>
+            <div class="col-md-4 mt-2">
+                <span class="badge bg-light text-dark">Other</span>
+                <small class="text-muted"> - Other failure reasons</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    $(document).ready(function() {
+        $('#attemptsTable').DataTable({
+            paging: false,
+            searching: false,
+            info: false,
+            order: [[0, 'desc']]
+        });
+    });
+</script>
+{% endblock %}

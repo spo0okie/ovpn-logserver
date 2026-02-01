@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+
+{% block title %}Accounts - OpenVPN LogServer{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="bi bi-people"></i> Accounts</h1>
+    <span class="text-muted">Total: {{ accounts.meta.total }}</span>
+</div>
+
+<!-- Фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" action="/accounts" class="row g-3">
+            <div class="col-md-4">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" name="search" 
+                           placeholder="Search by CN..." value="{{ search or '' }}">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <select class="form-select" name="is_revoked">
+                    <option value="">All Statuses</option>
+                    <option value="false" {% if is_revoked == 'false' %}selected{% endif %}>Active</option>
+                    <option value="true" {% if is_revoked == 'true' %}selected{% endif %}>Revoked</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <select class="form-select" name="has_ccd">
+                    <option value="">CCD Filter</option>
+                    <option value="true" {% if has_ccd == 'true' %}selected{% endif %}>With CCD</option>
+                    <option value="false" {% if has_ccd == 'false' %}selected{% endif %}>Without CCD</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-funnel"></i> Filter
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Таблица аккаунтов -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="accountsTable">
+                <thead>
+                    <tr>
+                        <th>CN</th>
+                        <th>Status</th>
+                        <th>CCD</th>
+                        <th>Valid From</th>
+                        <th>Valid To</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for account in accounts.data %}
+                    <tr>
+                        <td>
+                            <i class="bi bi-person-circle text-primary"></i>
+                            <strong>{{ account.cn }}</strong>
+                        </td>
+                        <td>
+                            {% if account.is_revoked %}
+                                <span class="badge badge-revoked">Revoked</span>
+                            {% else %}
+                                <span class="badge bg-success">Active</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if account.has_ccd %}
+                                <span class="badge bg-info"><i class="bi bi-check"></i> Yes</span>
+                            {% else %}
+                                <span class="badge bg-secondary"><i class="bi bi-x"></i> No</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if account.valid_from %}
+                                {{ account.valid_from.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if account.valid_to %}
+                                {% if account.valid_to < now %}
+                                    <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
+                                {% else %}
+                                    {{ account.valid_to.strftime('%Y-%m-%d') }}
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ account.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td class="table-actions">
+                            <a href="/accounts/{{ account.cn }}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-eye"></i> View
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox fs-1"></i>
+                            <p class="mt-2">No accounts found</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Пагинация -->
+        {% if accounts.meta.total_pages > 1 %}
+        <nav aria-label="Page navigation">
+            <ul class="pagination justify-content-center">
+                {% if accounts.meta.page > 1 %}
+                <li class="page-item">
+                    <a class="page-link" href="/accounts?page={{ accounts.meta.page - 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">
+                        <i class="bi bi-chevron-left"></i> Previous
+                    </a>
+                </li>
+                {% endif %}
+                
+                {% for p in range(1, accounts.meta.total_pages + 1) %}
+                    {% if p == accounts.meta.page %}
+                        <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% elif p <= 3 or p > accounts.meta.total_pages - 3 or (p >= accounts.meta.page - 1 and p <= accounts.meta.page + 1) %}
+                        <li class="page-item">
+                            <a class="page-link" href="/accounts?page={{ p }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">{{ p }}</a>
+                        </li>
+                    {% elif p == 4 or p == accounts.meta.total_pages - 3 %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if accounts.meta.page < accounts.meta.total_pages %}
+                <li class="page-item">
+                    <a class="page-link" href="/accounts?page={{ accounts.meta.page + 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">
+                        Next <i class="bi bi-chevron-right"></i>
+                    </a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        
+        <div class="text-center text-muted">
+            <small>Showing {{ ((accounts.meta.page - 1) * accounts.meta.per_page) + 1 }} - 
+                   {{ [accounts.meta.page * accounts.meta.per_page, accounts.meta.total] | min }} 
+                   of {{ accounts.meta.total }} accounts</small>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    $(document).ready(function() {
+        $('#accountsTable').DataTable({
+            paging: false,
+            searching: false,
+            info: false,
+            order: [[0, 'asc']]
+        });
+    });
+</script>
+{% endblock %}
