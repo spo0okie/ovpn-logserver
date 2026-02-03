@@ -2,14 +2,17 @@
 Аутентификация для API - Basic Auth.
 
 Реализует I7.6: Аутентификация обязательна для всех endpoints.
+Учетные данные читаются из config/auth.yaml.
 """
 
-import os
 import secrets
 from typing import Optional
 
 from fastapi import HTTPException, status, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+# Импортируем централизованную конфигурацию
+from core.config import get_web_auth_credentials
 
 
 # HTTPBasic для FastAPI
@@ -24,6 +27,7 @@ def get_current_user(
     Проверяет Basic Auth credentials.
 
     I7.6: Аутентификация обязательна для всех endpoints.
+    Учетные данные читаются из config/auth.yaml.
 
     Args:
         request: HTTP запрос
@@ -58,18 +62,13 @@ def get_current_user(
             headers={"WWW-Authenticate": "Basic"},
         )
 
-    # Получаем пользователей из переменной окружения
-    # Формат: user1:pass1,user2:pass2
-    api_users = os.getenv("API_USERS", "admin:admin")
+    # Получаем учетные данные из конфигурации
+    auth_config = get_web_auth_credentials()
+    valid_username = auth_config.get("username", "admin")
+    valid_password = auth_config.get("password", "admin_password_123")
 
-    valid_users = {}
-    for user_pass in api_users.split(","):
-        if ":" in user_pass:
-            user, pwd = user_pass.split(":", 1)
-            valid_users[user] = pwd
-
-    # Проверяем credentials
-    if username not in valid_users:
+    # Проверяем username
+    if not secrets.compare_digest(username, valid_username):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -77,7 +76,7 @@ def get_current_user(
         )
 
     # Константное время сравнения для предотвращения timing attacks
-    if not secrets.compare_digest(password, valid_users[username]):
+    if not secrets.compare_digest(password, valid_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",

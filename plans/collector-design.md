@@ -53,15 +53,40 @@
 4. Создает запись в `sessions` со статусом 'active'
 5. Возвращает exit code 0 (успех) или 1 (ошибка)
 
-**Код скрипта:**
-```python
-#!/opt/openvpn-logserver/venv/bin/python
-# /etc/openvpn/scripts/client-connect
+**Код wrapper-скрипта:**
 
+Создайте файл `/etc/openvpn/scripts/client-connect`:
+
+```python
+#!/usr/bin/env python3
+"""
+Wrapper для client-connect скрипта OpenVPN.
+"""
+import sys
+
+# Добавляем путь к проекту для импорта модулей
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_connect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+```
+
+Основная логика находится в [`collector/client_connect.py`](collector/client_connect.py):
+
+```python
 import os
 import sys
-import MySQLdb
-from geoip_resolver import resolve_geoip
+import logging
+from datetime import datetime
+
+# Добавляем родительскую директорию в путь для импорта core
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.database import SessionLocal
+from core.models import Account, Session
+from core.geoip import resolve_geoip
 
 def main():
     # Получаем переменные от OpenVPN
@@ -70,47 +95,42 @@ def main():
     virtual_ip = os.environ.get('ifconfig_pool_remote_ip')
     
     if not cn or not source_ip:
-        print("Missing required environment variables", file=sys.stderr)
-        sys.exit(1)
+        logging.warning("Missing required environment variables")
+        return 0  # Не блокируем VPN
     
+    db = SessionLocal()
     try:
-        # Подключаемся к БД
-        db = MySQLdb.connect(
-            host="localhost",
-            user="ovpn_collector",
-            passwd=os.environ.get('DB_PASSWORD', ''),
-            db="openvpn_logs"
-        )
-        cursor = db.cursor()
-        
-        # Получаем или создаем account
-        cursor.execute(
-            "INSERT INTO accounts (cn) VALUES (%s) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
-            (cn,)
-        )
-        account_id = cursor.lastrowid
+        # Создаем или получаем account (upsert без SELECT)
+        account = Account(cn=cn)
+        merged_account = db.merge(account)
+        db.flush()
         
         # Получаем геолокацию
-        geo = resolve_geoip(source_ip)
+        geo = resolve_geoip(source_ip, db)
         
         # Создаем сессию
-        cursor.execute("""
-            INSERT INTO sessions (account_id, connected_at, source_ip, country, city, virtual_ip, status)
-            VALUES (%s, NOW(), %s, %s, %s, %s, 'active')
-        """, (account_id, source_ip, geo.get('country'), geo.get('city'), virtual_ip))
-        
+        session = Session(
+            account_id=merged_account.id,
+            connected_at=datetime.utcnow(),
+            source_ip=source_ip,
+            country=geo.get('country') if geo else None,
+            city=geo.get('city') if geo else None,
+            virtual_ip=virtual_ip,
+            status='active'
+        )
+        db.add(session)
         db.commit()
-        cursor.close()
-        db.close()
         
-        sys.exit(0)
+        return 0
         
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        logging.error(f"Error: {e}")
+        return 0  # Не блокируем VPN при ошибке
+    finally:
+        db.close()
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
 ```
 
 ### 2. client-disconnect Script
@@ -129,14 +149,39 @@ if __name__ == '__main__':
 3. Обновляет `disconnected_at`, `status='closed'`, трафик
 4. Возвращает exit code 0
 
-**Код скрипта:**
-```python
-#!/opt/openvpn-logserver/venv/bin/python
-# /etc/openvpn/scripts/client-disconnect
+**Код wrapper-скрипта:**
 
+Создайте файл `/etc/openvpn/scripts/client-disconnect`:
+
+```python
+#!/usr/bin/env python3
+"""
+Wrapper для client-disconnect скрипта OpenVPN.
+"""
+import sys
+
+# Добавляем путь к проекту для импорта модулей
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_disconnect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+```
+
+Основная логика находится в [`collector/client_disconnect.py`](collector/client_disconnect.py):
+
+```python
 import os
 import sys
-import MySQLdb
+import logging
+from datetime import datetime
+
+# Добавляем родительскую директорию в путь для импорта core
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.database import SessionLocal
+from core.models import Account, Session
 
 def main():
     cn = os.environ.get('common_name')
@@ -144,42 +189,33 @@ def main():
     bytes_received = int(os.environ.get('bytes_received', 0))
     
     if not cn:
-        sys.exit(0)  # Не критичная ошибка
+        return 0  # Не критичная ошибка
     
+    db = SessionLocal()
     try:
-        db = MySQLdb.connect(
-            host="localhost",
-            user="ovpn_collector",
-            passwd=os.environ.get('DB_PASSWORD', ''),
-            db="openvpn_logs"
-        )
-        cursor = db.cursor()
+        # Находим последнюю активную сессию по CN
+        active_session = db.query(Session).join(Account).filter(
+            Account.cn == cn,
+            Session.status == 'active'
+        ).order_by(Session.connected_at.desc()).first()
         
-        # Обновляем последнюю активную сессию
-        cursor.execute("""
-            UPDATE sessions s
-            JOIN accounts a ON a.id = s.account_id
-            SET s.disconnected_at = NOW(),
-                s.status = 'closed',
-                s.bytes_sent = %s,
-                s.bytes_received = %s
-            WHERE a.cn = %s AND s.status = 'active'
-            ORDER BY s.connected_at DESC
-            LIMIT 1
-        """, (bytes_sent, bytes_received, cn))
+        if active_session:
+            active_session.disconnected_at = datetime.utcnow()
+            active_session.status = 'closed'
+            active_session.bytes_sent = bytes_sent
+            active_session.bytes_received = bytes_received
+            db.commit()
         
-        db.commit()
-        cursor.close()
-        db.close()
-        
-        sys.exit(0)
+        return 0
         
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(0)  # Не блокируем отключение
+        logging.error(f"Error: {e}")
+        return 0  # Не блокируем отключение
+    finally:
+        db.close()
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
 ```
 
 ### 3. auth-failed Script (опционально)
@@ -302,9 +338,33 @@ def resolve_geoip(ip: str) -> dict:
 
 Остаются для синхронизации сертификатов, CRL, CCD:
 
-- **cert_sync.py** - обновление сроков действия сертификатов
+- **cert_sync.py** - создание accounts из неотозванных сертификатов и обновление сроков
 - **crl_checker.py** - проверка отозванных сертификатов
 - **ccd_checker.py** - проверка наличия CCD файлов
+
+#### cert_sync.py
+
+Сканирует директорию с сертификатами и синхронизирует с БД:
+
+1. **Парсит CRL** для определения отозванных сертификатов
+2. **Для каждого неотозванного сертификата**:
+   - Создаёт account если CN не существует (INSERT через `db.merge()`)
+   - Обновляет `valid_from` и `valid_to` из сертификата
+3. **Отозванные сертификаты пропускаются** — для них account не создаётся
+
+**Инварианты:**
+- I6.1: Обновляет `valid_from`, `valid_to` из сертификатов
+- I6.4: Идемпотентен (повторный запуск не ломает данные)
+- I6.5: Создаёт accounts для неотозванных CN (INSERT или UPDATE через `merge()`)
+
+**Пример работы:**
+```python
+# Сканируем /etc/openvpn/certs
+# Находим: client1.crt (не отозван), client2.crt (отозван в CRL)
+# Результат:
+# - client1: создан или обновлён в БД
+# - client2: пропущен (не создаём account для отозванного)
+```
 
 ## Преимущества подхода со скриптами
 
@@ -343,6 +403,26 @@ verb 3
 mkdir -p /etc/openvpn/scripts
 chown root:ovpn-logserver /etc/openvpn/scripts
 chmod 750 /etc/openvpn/scripts
+
+# Создаем wrapper-скрипты (не копируем Python файлы напрямую!)
+# См. примеры в collector/openvpn_scripts/
+cat > /etc/openvpn/scripts/client-connect <<'EOF'
+#!/usr/bin/env python3
+import sys
+sys.path.insert(0, '/opt/openvpn-logserver')
+from collector.client_connect import main
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
+
+cat > /etc/openvpn/scripts/client-disconnect <<'EOF'
+#!/usr/bin/env python3
+import sys
+sys.path.insert(0, '/opt/openvpn-logserver')
+from collector.client_disconnect import main
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
 
 # Скрипты должны быть executable
 chmod 755 /etc/openvpn/scripts/client-connect

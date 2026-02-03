@@ -1,20 +1,211 @@
 # Развертывание и Systemd сервисы
 
-## Структура установки
+## Быстрый старт для root
+
+Минимальная установка для работы под пользователем root.
+
+### Требования
+- Debian/Ubuntu
+- Python 3.9+
+- MySQL 8.0+
+
+### Установка
+
+```bash
+# Установка зависимостей
+apt update
+apt install -y python3 python3-pip mysql-server git
+
+# Клонирование репозитория
+cd /opt
+git clone <repository-url> openvpn-logserver
+cd openvpn-logserver
+
+# Установка Python зависимостей
+pip install -r database/requirements.txt
+pip install -r web/requirements.txt
+pip install -r collector/requirements.txt
+
+# Настройка базы данных
+mysql -u root -p <<EOF
+CREATE DATABASE IF NOT EXISTS openvpn_logs CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'REDACTED_DB_PASSWORD';
+GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+# Применение миграций
+cd database && alembic upgrade head && cd ..
+
+# Создание директории для конфигов
+mkdir -p /etc/openvpn-logserver/config
+
+# Копирование конфигурации
+cp config/database.yaml /etc/openvpn-logserver/config
+cp config/auth.yaml /etc/openvpn-logserver/config
+cp config/web.yaml /etc/openvpn-logserver/config
+
+# Создание директории для логов
+mkdir -p /opt/openvpn-logserver/logs
+```
+
+### 2. Подключение скриптов к OpenVPN
+
+Скрипты `client-connect` и `client-disconnect` фиксируют подключения в БД.
+
+#### 2.1 Создание wrapper-скриптов
+
+Вместо прямого копирования Python-файлов создаём wrapper-скрипты, которые:
+- Устанавливают правильный `PYTHONPATH`
+- Вызывают функции из оригинальных модулей
+
+```bash
+# Создаем директорию для скриптов
+mkdir -p /etc/openvpn/scripts
+
+# Создаем wrapper для client-connect
+cat > /etc/openvpn/scripts/client-connect <<'EOF'
+#!/usr/bin/env python3
+"""
+Wrapper для client-connect скрипта OpenVPN.
+Вызывается при подключении клиента.
+"""
+import sys
+import os
+
+# Добавляем путь к проекту для импорта модулей
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_connect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
+
+# Создаем wrapper для client-disconnect
+cat > /etc/openvpn/scripts/client-disconnect <<'EOF'
+#!/usr/bin/env python3
+"""
+Wrapper для client-disconnect скрипта OpenVPN.
+Вызывается при отключении клиента.
+"""
+import sys
+import os
+
+# Добавляем путь к проекту для импорта модулей
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_disconnect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
+
+# Права на выполнение
+chmod +x /etc/openvpn/scripts/client-connect
+chmod +x /etc/openvpn/scripts/client-disconnect
+```
+
+#### 2.2 Настройка OpenVPN
+
+Добавьте в `/etc/openvpn/server.conf`:
+
+```conf
+# Скрипты логирования
+client-connect /etc/openvpn/scripts/client-connect
+client-disconnect /etc/openvpn/scripts/client-disconnect
+
+# Передача переменных окружения скриптам
+setenv-safe common_name
+setenv-safe trusted_ip
+setenv-safe ifconfig_pool_remote_ip
+```
+
+Перезапустите OpenVPN:
+```bash
+systemctl restart openvpn@server
+```
+
+#### 2.3 Проверка
+
+Подключитесь к VPN и проверьте:
+```bash
+# В БД должна появиться запись
+mysql -u root -p openvpn_logs -e "SELECT * FROM sessions WHERE status='active';"
+
+# Логи скриптов
+journalctl -u openvpn@server -f
+```
+
+### 3. Настройка конфигурации
+
+Отредактируйте `/etc/openvpn-logserver/config/database.yaml`:
+- Установите `password` - пароль для подключения к БД (в открытом виде)
+
+Отредактируйте `/etc/openvpn-logserver/config/auth.yaml`:
+- Установите `username` и `password` для доступа к Web UI
+
+Отредактируйте `/etc/openvpn-logserver/config/web.yaml`:
+- Установите `secret_key` (случайная строка минимум 32 символа)
+
+### 4. Запуск
+
+**Вручную:**
+```bash
+uvicorn web.main:app --host 0.0.0.0 --port 8000
+```
+
+**Через systemd:**
+```bash
+# Копирование unit-файлов
+cp systemd/openvpn-web.service /etc/systemd/system/
+cp systemd/openvpn-sync.service /etc/systemd/system/
+cp systemd/openvpn-sync.timer /etc/systemd/system/
+
+# Обновление systemd и запуск
+systemctl daemon-reload
+systemctl enable --now openvpn-web
+systemctl enable --now openvpn-sync.timer
+```
+
+### 5. Проверка
+
+```bash
+# Статус сервисов
+systemctl status openvpn-web
+systemctl list-timers openvpn-sync.timer
+
+# Логи
+journalctl -u openvpn-web -f
+
+# API check
+curl -u admin:admin_password_123 http://localhost:8000/api/v1/stats/overview
+```
+
+---
+
+## Развертывание с изоляцией (опционально)
+
+Полная инструкция с созданием отдельного пользователя и настройкой безопасности.
+
+### Структура установки
 
 ```
 /opt/openvpn-logserver/          # Корневая директория
 ├── venv/                        # Python virtual environment
 ├── collector/                   # Модуль сбора данных
 ├── web/                         # Web приложение
+├── core/                        # Общие модули (модели, БД)
+├── database/                    # Миграции Alembic
 ├── config/                      # Конфигурационные файлы
-│   ├── collector.yaml
-│   └── web.yaml
+│   ├── database.yaml            # Конфигурация БД
+│   ├── auth.yaml                # Учетные данные
+│   └── web.yaml                 # Конфигурация web-приложения
 ├── logs/                        # Логи приложения
 └── systemd/                     # Unit файлы (копируются в /etc/systemd/system/)
 ```
 
-## Пользователи и права
+### Пользователи и права
 
 ```bash
 # Создать системного пользователя
@@ -31,102 +222,235 @@ sudo mkdir -p /opt/openvpn-logserver
 sudo chown -R ovpn-logserver:ovpn-logserver /opt/openvpn-logserver
 ```
 
-## Установка
+### Установка
 
-### 1. Подготовка системы
+#### 1. Подготовка системы
 
 ```bash
 # Установить зависимости
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip mysql-server
+sudo apt install -y python3 python3-venv python3-pip mysql-server git
 ```
 
-### 2. Клонирование и настройка
+#### 2. Клонирование и настройка
 
 ```bash
+# Клонировать репозиторий (замените URL на актуальный)
+cd /opt
+sudo git clone <repository-url> openvpn-logserver
+sudo chown -R ovpn-logserver:ovpn-logserver /opt/openvpn-logserver
+
+# Переходим в директорию проекта
 cd /opt/openvpn-logserver
 
 # Создать virtual environment
-python3 -m venv venv
+sudo -u ovpn-logserver python3 -m venv venv
 source venv/bin/activate
 
 # Установить зависимости
-pip install -r collector/requirements.txt
+pip install -r database/requirements.txt
 pip install -r web/requirements.txt
+pip install -r collector/requirements.txt
 
-# Инициализировать БД
-alembic upgrade head
+# Создать директорию для логов
+sudo -u ovpn-logserver mkdir -p logs
 ```
 
-### 3. Конфигурация
+#### 3. Настройка базы данных
+
+```bash
+# Создать базу данных и пользователя
+sudo mysql -u root <<EOF
+CREATE DATABASE IF NOT EXISTS openvpn_logs CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'REDACTED_DB_PASSWORD';
+GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+```
+
+#### 4. Конфигурация
+
+##### 4.1 Создание конфигурационных файлов
 
 ```bash
 # Создать директорию для конфигов
-sudo mkdir -p /etc/openvpn-logserver
+sudo mkdir -p /opt/openvpn-logserver/config
 
-# Скопировать и настроить конфиги
-sudo cp config/collector.yaml /etc/openvpn-logserver/
-sudo cp config/web.yaml /etc/openvpn-logserver/
+# Создать конфигурацию БД
+sudo tee /opt/openvpn-logserver/config/database.yaml <<EOF
+# Конфигурация базы данных OpenVPN LogServer
+# Все настройки хранятся в открытом виде в YML файлах
 
-# Установить пароль БД
-sudo touch /etc/openvpn-logserver/db_password
-sudo chmod 600 /etc/openvpn-logserver/db_password
-sudo chown ovpn-logserver:ovpn-logserver /etc/openvpn-logserver/db_password
-echo "your_password" | sudo tee /etc/openvpn-logserver/db_password
+database:
+  # Параметры подключения к MySQL
+  host: localhost
+  port: 3306
+  name: openvpn_logs
+  user: openvpn_user
+  password: REDACTED_DB_PASSWORD  # Пароль в открытом виде
+
+  # Параметры пула соединений
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+
+  # Дополнительные параметры подключения
+  charset: utf8mb4
+EOF
+
+# Создать конфигурацию аутентификации
+sudo tee /opt/openvpn-logserver/config/auth.yaml <<EOF
+# Конфигурация аутентификации OpenVPN LogServer
+# Учетные данные для доступа к системе
+
+auth:
+  web:
+    username: admin
+    password: admin_password_123  # Пароль в открытом виде
+EOF
+
+# Создать конфигурацию web приложения
+sudo tee /opt/openvpn-logserver/config/web.yaml <<EOF
+# Конфигурация Web приложения OpenVPN LogServer
+
+# Настройки базы данных
+# URL подключения формируется автоматически из database.yaml
+database:
+  # Пул соединений
+  pool_size: 10
+  max_overflow: 20
+
+# Настройки приложения
+app:
+  # Хост для прослушивания (127.0.0.1 для локального доступа, 0.0.0.0 для всех интерфейсов)
+  host: 127.0.0.1
+
+  # Порт
+  port: 8000
+
+  # Количество worker-процессов
+  workers: 2
+
+  # Секретный ключ для сессий (измените на случайную строку!)
+  secret_key: "change-this-to-random-secret-key-min-32-chars"
+
+  # Режим отладки (не включайте в production!)
+  debug: false
+
+# Настройки логирования
+logging:
+  # Уровень логирования: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+
+  # Путь к файлу логов
+  file: /opt/openvpn-logserver/logs/web.log
+
+  # Максимальный размер файла лога в байтах
+  max_bytes: 10485760  # 10 MB
+
+  # Количество резервных копий логов
+  backup_count: 5
+
+# Настройки пагинации
+pagination:
+  # Количество элементов на странице по умолчанию
+  default_page_size: 25
+
+  # Максимальное количество элементов на странице
+  max_page_size: 100
+EOF
+
+# Установить права на конфиги
+sudo chmod 640 /opt/openvpn-logserver/config/*.yaml
+sudo chown ovpn-logserver:ovpn-logserver /opt/openvpn-logserver/config/*.yaml
 ```
 
-## Systemd сервисы
+#### 5. Применение миграций
 
-### 1. openvpn-collector.service
-
-Основной демон сбора логов.
-
-```ini
-# /etc/systemd/system/openvpn-collector.service
-[Unit]
-Description=OpenVPN Log Collector
-Documentation=https://github.com/yourorg/openvpn-logserver
-After=network.target mysql.service
-Wants=mysql.service
-
-[Service]
-Type=simple
-User=ovpn-logserver
-Group=ovpn-logserver
-WorkingDirectory=/opt/openvpn-logserver
-
-Environment=PYTHONPATH=/opt/openvpn-logserver
-Environment=CONFIG_PATH=/etc/openvpn-logserver/collector.yaml
-Environment=DB_PASSWORD_FILE=/etc/openvpn-logserver/db_password
-Environment=LOG_LEVEL=INFO
-
-ExecStart=/opt/openvpn-logserver/venv/bin/python -m collector.log_watcher
-ExecReload=/bin/kill -HUP $MAINPID
-
-Restart=always
-RestartSec=10
-StartLimitInterval=60s
-StartLimitBurst=3
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/openvpn-logserver/logs
-ReadOnlyPaths=/etc/openvpn-logserver
-ReadOnlyPaths=/var/log/openvpn
-ReadOnlyPaths=/etc/openvpn
-
-[Install]
-WantedBy=multi-user.target
+```bash
+# Применить миграции
+cd database && alembic upgrade head && cd ..
 ```
 
-### 2. openvpn-web.service
+#### 6. Настройка OpenVPN скриптов
+
+```bash
+# Создать директорию для скриптов OpenVPN
+sudo mkdir -p /etc/openvpn/scripts
+
+# Скопировать скрипты client-connect и client-disconnect
+sudo tee /etc/openvpn/scripts/client-connect <<'EOF'
+#!/opt/openvpn-logserver/venv/bin/python
+"""
+Скрипт client-connect для OpenVPN.
+Вызывается при подключении клиента.
+"""
+import os
+import sys
+
+# Добавляем путь к проекту
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_connect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
+
+sudo tee /etc/openvpn/scripts/client-disconnect <<'EOF'
+#!/opt/openvpn-logserver/venv/bin/python
+"""
+Скрипт client-disconnect для OpenVPN.
+Вызывается при отключении клиента.
+"""
+import os
+import sys
+
+# Добавляем путь к проекту
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+from collector.client_disconnect import main
+
+if __name__ == '__main__':
+    sys.exit(main())
+EOF
+
+# Установить права на скрипты
+sudo chmod 755 /etc/openvpn/scripts/client-connect
+sudo chmod 755 /etc/openvpn/scripts/client-disconnect
+sudo chown root:ovpn-logserver /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
+```
+
+#### 7. Настройка OpenVPN
+
+Добавьте в конфигурацию OpenVPN (`/etc/openvpn/server.conf`):
+
+```conf
+# Скрипты подключения/отключения
+client-connect /etc/openvpn/scripts/client-connect
+client-disconnect /etc/openvpn/scripts/client-disconnect
+
+# Логирование
+log-append /var/log/openvpn/server.log
+verb 3
+status /var/log/openvpn/status.log
+```
+
+Перезапустите OpenVPN:
+```bash
+sudo systemctl restart openvpn-server@server
+```
+
+## Systemd сервисы (для изолированного развертывания)
+
+### 1. openvpn-web.service
 
 Web приложение.
 
-```ini
-# /etc/systemd/system/openvpn-web.service
+```bash
+# Создать unit-файл
+sudo tee /etc/systemd/system/openvpn-web.service <<'EOF'
 [Unit]
 Description=OpenVPN LogServer Web Interface
 Documentation=https://github.com/yourorg/openvpn-logserver
@@ -140,16 +464,12 @@ Group=ovpn-logserver
 WorkingDirectory=/opt/openvpn-logserver
 
 Environment=PYTHONPATH=/opt/openvpn-logserver
-Environment=CONFIG_PATH=/etc/openvpn-logserver/web.yaml
-Environment=DB_PASSWORD_FILE=/etc/openvpn-logserver/db_password
 Environment=LOG_LEVEL=INFO
 
 ExecStart=/opt/openvpn-logserver/venv/bin/uvicorn web.main:app \
     --host 127.0.0.1 \
     --port 8000 \
-    --workers 2 \
-    --access-log \
-    --error-log
+    --workers 2
 
 Restart=always
 RestartSec=5
@@ -161,18 +481,20 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/openvpn-logserver/logs
-ReadOnlyPaths=/etc/openvpn-logserver
+ReadOnlyPaths=/opt/openvpn-logserver/config
 
 [Install]
 WantedBy=multi-user.target
+EOF
 ```
 
-### 3. openvpn-sync.timer + openvpn-sync.service
+### 2. openvpn-sync.timer + openvpn-sync.service
 
-Периодические задачи синхронизации.
+Периодические задачи синхронизации (сертификаты, CRL, CCD).
 
-```ini
-# /etc/systemd/system/openvpn-sync.timer
+```bash
+# Timer
+sudo tee /etc/systemd/system/openvpn-sync.timer <<'EOF'
 [Unit]
 Description=OpenVPN Data Sync Timer
 Documentation=https://github.com/yourorg/openvpn-logserver
@@ -184,10 +506,10 @@ AccuracySec=1s
 
 [Install]
 WantedBy=timers.target
-```
+EOF
 
-```ini
-# /etc/systemd/system/openvpn-sync.service
+# Service
+sudo tee /etc/systemd/system/openvpn-sync.service <<'EOF'
 [Unit]
 Description=OpenVPN Data Sync
 Documentation=https://github.com/yourorg/openvpn-logserver
@@ -200,27 +522,41 @@ Group=ovpn-logserver
 WorkingDirectory=/opt/openvpn-logserver
 
 Environment=PYTHONPATH=/opt/openvpn-logserver
-Environment=CONFIG_PATH=/etc/openvpn-logserver/collector.yaml
-Environment=DB_PASSWORD_FILE=/etc/openvpn-logserver/db_password
 
-ExecStart=/opt/openvpn-logserver/venv/bin/python -m collector.sync_all
+ExecStart=/opt/openvpn-logserver/venv/bin/python -c "
+import sys
+sys.path.insert(0, '/opt/openvpn-logserver')
+from collector.cert_sync import sync_certificates
+from collector.crl_checker import check_crl
+from collector.ccd_checker import check_ccd
+from core.database import SessionLocal
+db = SessionLocal()
+try:
+    sync_certificates(db)
+    check_crl(db)
+    check_ccd(db)
+finally:
+    db.close()
+"
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/etc/openvpn-logserver
+ReadOnlyPaths=/opt/openvpn-logserver/config
 ReadOnlyPaths=/etc/openvpn
+EOF
 ```
 
 ## Nginx (Reverse Proxy)
 
-```nginx
-# /etc/nginx/sites-available/openvpn-logserver
+```bash
+# Создать конфигурацию Nginx
+sudo tee /etc/nginx/sites-available/openvpn-logserver <<'EOF'
 server {
     listen 80;
     server_name vpn-monitor.example.com;
-    
+
     # Redirect to HTTPS
     return 301 https://$server_name$request_uri;
 }
@@ -228,27 +564,27 @@ server {
 server {
     listen 443 ssl http2;
     server_name vpn-monitor.example.com;
-    
+
     ssl_certificate /etc/ssl/certs/vpn-monitor.crt;
     ssl_certificate_key /etc/ssl/private/vpn-monitor.key;
-    
+
     # Basic Auth
     auth_basic "OpenVPN Monitor";
     auth_basic_user_file /etc/nginx/.htpasswd;
-    
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # WebSocket support (for future real-time features)
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
-    
+
     # Static files (optional - for better performance)
     location /static {
         alias /opt/openvpn-logserver/web/static;
@@ -256,6 +592,11 @@ server {
         add_header Cache-Control "public, immutable";
     }
 }
+EOF
+
+# Активировать сайт
+sudo ln -sf /etc/nginx/sites-available/openvpn-logserver /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 Создание пользователя basic auth:
@@ -270,9 +611,6 @@ sudo htpasswd -c /etc/nginx/.htpasswd admin
 # Перезагрузить systemd
 sudo systemctl daemon-reload
 
-# Запустить коллектор
-sudo systemctl enable --now openvpn-collector
-
 # Запустить web
 sudo systemctl enable --now openvpn-web
 
@@ -280,13 +618,12 @@ sudo systemctl enable --now openvpn-web
 sudo systemctl enable --now openvpn-sync.timer
 
 # Проверить статус
-sudo systemctl status openvpn-collector
 sudo systemctl status openvpn-web
 sudo systemctl list-timers openvpn-sync.timer
 
 # Просмотр логов
-sudo journalctl -u openvpn-collector -f
 sudo journalctl -u openvpn-web -f
+sudo journalctl -u openvpn-sync -f
 ```
 
 ## Мониторинг
@@ -295,10 +632,10 @@ sudo journalctl -u openvpn-web -f
 
 ```bash
 # Проверка web приложения
-curl -u admin:password http://localhost:8000/api/v1/stats/overview
+curl -u admin:admin_password_123 http://localhost:8000/api/v1/stats/overview
 
 # Проверка БД
-mysql -u ovpn_collector -p -e "SELECT 1 FROM accounts LIMIT 1;" openvpn_logs
+mysql -u openvpn_user -p -e "SELECT 1 FROM accounts LIMIT 1;" openvpn_logs
 ```
 
 ### Метрики (опционально)
@@ -323,11 +660,14 @@ async def metrics():
 BACKUP_DIR="/backup/openvpn-logserver"
 DATE=$(date +%Y%m%d_%H%M%S)
 
+# Создать директорию для бэкапов
+mkdir -p "$BACKUP_DIR"
+
 # Backup database
 mysqldump -u root -p openvpn_logs > "$BACKUP_DIR/db_$DATE.sql"
 
 # Backup config
-cp -r /etc/openvpn-logserver "$BACKUP_DIR/config_$DATE"
+cp -r /opt/openvpn-logserver/config "$BACKUP_DIR/config_$DATE"
 
 # Cleanup old backups (keep 30 days)
 find "$BACKUP_DIR" -name "*.sql" -mtime +30 -delete
@@ -346,22 +686,32 @@ cd /opt/openvpn-logserver
 ./scripts/backup.sh
 
 # Stop services
-sudo systemctl stop openvpn-collector openvpn-web
+sudo systemctl stop openvpn-web openvpn-sync.timer
 
 # Update code
-git pull origin main
+sudo -u ovpn-logserver git pull origin main
 
 # Update dependencies
 source venv/bin/activate
-pip install -r collector/requirements.txt --upgrade
+pip install -r database/requirements.txt --upgrade
 pip install -r web/requirements.txt --upgrade
+pip install -r collector/requirements.txt --upgrade
 
 # Run migrations
-alembic upgrade head
+cd database && alembic upgrade head && cd ..
 
 # Start services
-sudo systemctl start openvpn-collector openvpn-web
+sudo systemctl start openvpn-web openvpn-sync.timer
 
 # Check status
-sudo systemctl status openvpn-collector openvpn-web
+sudo systemctl status openvpn-web
 ```
+
+## Порядок развертывания (кратко)
+
+1. **Установить зависимости** - Python, MySQL, Git
+2. **Подключить скрипты к OpenVPN** - скопировать `client-connect` и `client-disconnect`, настроить `server.conf`
+3. **Создать файл `config/database.yaml`** - настройки БД с паролем в открытом виде
+4. **Создать файл `config/auth.yaml`** - учетные данные для доступа
+5. **Применить миграции** - `cd database && alembic upgrade head`
+6. **Запустить компоненты** - Web UI и systemd таймеры

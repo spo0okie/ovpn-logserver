@@ -82,13 +82,13 @@ class TestI22TableAndColumnNames:
         assert GeoIPCache.__tablename__ == "geoip_cache"
     
     # --- Тесты имен полей Account ---
-    
+
     def test_account_column_names(self):
         """Account должен иметь все поля из схемы БД."""
         mapper = inspect(Account)
         column_names = {col.name for col in mapper.columns}
         expected = {
-            "id", "cn", "valid_from", "valid_to", "is_revoked",
+            "id", "cn", "serial_number", "valid_from", "valid_to", "is_revoked",
             "revoked_at", "has_ccd", "ccd_updated_at", "created_at", "updated_at"
         }
         assert column_names == expected
@@ -151,6 +151,12 @@ class TestI23ColumnTypes:
         col = Account.__table__.c.cn
         assert isinstance(col.type, String)
         assert col.type.length == 255
+
+    def test_account_serial_number_type(self):
+        """Account.serial_number должен быть String(64)."""
+        col = Account.__table__.c.serial_number
+        assert isinstance(col.type, String)
+        assert col.type.length == 64
     
     def test_account_valid_from_type(self):
         """Account.valid_from должен быть DateTime."""
@@ -318,25 +324,77 @@ class TestI24Relationships:
 class TestI25DatabaseConstraints:
     """Тесты проверяют, что ограничения БД (I1.1-I1.4) работают через ORM."""
     
-    # --- Тест I1.1: UNIQUE KEY uk_cn (cn) ---
-    
-    def test_duplicate_cn_raises_integrity_error(self, db_session: Session):
-        """Создание аккаунта с дублирующимся cn должно вызывать IntegrityError."""
+    # --- Тест I1.1: UNIQUE KEY uk_cn_serial (cn, serial_number) ---
+
+    def test_duplicate_cn_same_serial_raises_integrity_error(self, db_session: Session):
+        """Создание аккаунта с дублирующейся парой (cn, serial_number) должно вызывать IntegrityError."""
         # Создаем первый аккаунт
-        account1 = Account(cn="duplicate_test")
+        account1 = Account(cn="duplicate_test", serial_number="12345")
         db_session.add(account1)
         db_session.commit()
-        
-        # Пытаемся создать второй с тем же cn
-        account2 = Account(cn="duplicate_test")
+
+        # Пытаемся создать второй с тем же cn и serial_number
+        account2 = Account(cn="duplicate_test", serial_number="12345")
         db_session.add(account2)
-        
+
         # Должно выбросить IntegrityError
         with pytest.raises(IntegrityError):
             db_session.commit()
-        
+
         # Откатываем транзакцию для чистоты
         db_session.rollback()
+
+    def test_same_cn_different_serial_allowed(self, db_session: Session):
+        """Создание аккаунтов с одним CN но разными serial_number должно быть разрешено."""
+        # Создаем первый аккаунт
+        account1 = Account(cn="multi_cert_user", serial_number="ABC123")
+        db_session.add(account1)
+        db_session.commit()
+
+        # Создаем второй с тем же cn но другим serial_number
+        account2 = Account(cn="multi_cert_user", serial_number="DEF456")
+        db_session.add(account2)
+        db_session.commit()
+
+        # Проверяем что оба аккаунта созданы
+        accounts = db_session.query(Account).filter_by(cn="multi_cert_user").all()
+        assert len(accounts) == 2
+        assert {a.serial_number for a in accounts} == {"ABC123", "DEF456"}
+
+    def test_account_is_active_property(self, db_session: Session):
+        """Проверка property is_active."""
+        # Активный сертификат
+        active_account = Account(
+            cn="active_user",
+            serial_number="ACTIVE001",
+            is_revoked=False,
+            valid_to=datetime.utcnow() + timedelta(days=30)
+        )
+        db_session.add(active_account)
+
+        # Отозванный сертификат
+        revoked_account = Account(
+            cn="revoked_user",
+            serial_number="REVOKED001",
+            is_revoked=True,
+            valid_to=datetime.utcnow() + timedelta(days=30)
+        )
+        db_session.add(revoked_account)
+
+        # Истекший сертификат
+        expired_account = Account(
+            cn="expired_user",
+            serial_number="EXPIRED001",
+            is_revoked=False,
+            valid_to=datetime.utcnow() - timedelta(days=1)
+        )
+        db_session.add(expired_account)
+
+        db_session.commit()
+
+        assert active_account.is_active is True
+        assert revoked_account.is_active is False
+        assert expired_account.is_active is False
     
     # --- Тест I1.2: NOT NULL ограничения ---
     
@@ -564,18 +622,35 @@ class TestModelBehavior:
     
     def test_account_default_is_revoked(self, db_session: Session):
         """Account.is_revoked по умолчанию должен быть False."""
-        account = Account(cn="test_default_revoked")
+        account = Account(cn="test_default_revoked", serial_number="TEST001")
         db_session.add(account)
         db_session.commit()
         db_session.refresh(account)
-        
+
         assert account.is_revoked is False
-    
+
     def test_account_default_has_ccd(self, db_session: Session):
         """Account.has_ccd по умолчанию должен быть False."""
-        account = Account(cn="test_default_ccd")
+        account = Account(cn="test_default_ccd", serial_number="TEST002")
         db_session.add(account)
         db_session.commit()
         db_session.refresh(account)
-        
+
         assert account.has_ccd is False
+
+    def test_account_default_serial_number(self, db_session: Session):
+        """Account.serial_number по умолчанию должен быть 'unknown'."""
+        account = Account(cn="test_default_serial")
+        db_session.add(account)
+        db_session.commit()
+        db_session.refresh(account)
+
+        assert account.serial_number == "unknown"
+
+    def test_account_repr_with_serial(self):
+        """Account.__repr__ должен включать serial_number."""
+        account = Account(id=1, cn="test_user", serial_number="ABC123")
+        repr_str = repr(account)
+        assert "Account" in repr_str
+        assert "test_user" in repr_str
+        assert "ABC123" in repr_str

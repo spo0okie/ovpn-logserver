@@ -1,0 +1,30 @@
+[Unit]
+Description=OpenVPN LogServer Web Interface
+Documentation=https://github.com/yourorg/openvpn-logserver
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+# Работа от root (упрощенная установка)
+User=root
+Group=root
+WorkingDirectory=/opt/openvpn-logserver
+
+Environment=PYTHONPATH=/opt/openvpn-logserver
+# Пароль БД больше не требуется в переменных окружения - читается из config/database.yaml
+Environment=LOG_LEVEL=INFO
+
+# Запуск напрямую через uvicorn (без venv)
+ExecStart=uvicorn web.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2
+
+Restart=always
+RestartSec=5
+StartLimitInterval=60s
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

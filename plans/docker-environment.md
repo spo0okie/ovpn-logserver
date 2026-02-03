@@ -7,7 +7,7 @@
 │                           Docker Compose Network                              │
 │                                                                               │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐           │
-│  │   openvpn-server │  │   app-server     │  │  openvpn-client  │           │
+│  │   openvpn-server │  │   web            │  │  openvpn-client  │           │
 │  │   (VPN сервер)   │  │   (Приложение)   │  │  (VPN клиент)    │           │
 │  │                  │  │                  │  │                  │           │
 │  │  - OpenVPN 2.5+  │  │  - FastAPI Web   │  │  - OpenVPN       │           │
@@ -23,7 +23,7 @@
 │                                 │                                             │
 │                                 ▼                                             │
 │                    ┌──────────────────────┐                                  │
-│                    │      mysql-db        │                                  │
+│                    │      mysql           │                                  │
 │                    │   (MySQL 8.0)        │                                  │
 │                    │                      │                                  │
 │                    │  - openvpn_logs DB   │                                  │
@@ -39,11 +39,6 @@
 docker/
 ├── docker-compose.yml           # Основной compose файл
 ├── .env                         # Переменные окружения
-├──
-├── app/                         # Приложение
-│   ├── Dockerfile
-│   ├── entrypoint.sh
-│   └── requirements.txt
 │
 ├── openvpn-server/              # OpenVPN сервер
 │   ├── Dockerfile
@@ -51,22 +46,61 @@ docker/
 │   ├── entrypoint.sh
 │   └── scripts/
 │       ├── client-connect
-│       ├── client-disconnect
-│       └── setup-pki.sh
+│       └── client-disconnect
 │
 ├── openvpn-client/              # OpenVPN клиент (для тестов)
 │   ├── Dockerfile
-│   ├── client.conf.template
+│   ├── client.conf
 │   └── entrypoint.sh
 │
-├── mysql/                       # База данных
-│   ├── init.sql                 # Инициализация схемы
-│   └── docker-entrypoint-initdb.d/
+├── web/                         # Web приложение
+│   ├── Dockerfile
+│   └── requirements.txt
 │
-└── shared/                      # Общие данные
+├── mysql/                       # База данных
+│   └── init.sql                 # Инициализация схемы
+│
+└── shared/                      # Общие данные (volumes)
     ├── pki/                     # PKI (генерируется)
     ├── ccd/                     # Client configs
     └── logs/                    # Логи
+```
+
+## Переменные окружения
+
+### Обязательные переменные
+
+| Переменная | Описание | Пример |
+|------------|----------|--------|
+| `DB_PASSWORD` | Пароль для подключения к БД | `collectorpass` |
+
+### Опциональные переменные
+
+| Переменная | Описание | Значение по умолчанию |
+|------------|----------|----------------------|
+| `MYSQL_ROOT_PASSWORD` | Пароль root MySQL | `root_password` |
+| `MYSQL_DATABASE` | Имя базы данных | `openvpn_logs` |
+| `MYSQL_USER` | Пользователь MySQL | `openvpn` |
+| `MYSQL_PASSWORD` | Пароль пользователя MySQL | `openvpn_password` |
+| `DATABASE_URL` | URL подключения к БД (для Alembic) | формируется автоматически |
+| `SECRET_KEY` | Секретный ключ для web | `your-secret-key-change-in-production` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Время жизни токена | `30` |
+
+### Файл .env
+
+```bash
+# Database
+MYSQL_ROOT_PASSWORD=root_password
+MYSQL_DATABASE=openvpn_logs
+MYSQL_USER=openvpn
+MYSQL_PASSWORD=openvpn_password
+
+# App
+SECRET_KEY=your-secret-key-change-in-production
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Для совместимости с централизованной конфигурацией
+DB_PASSWORD=openvpn_password
 ```
 
 ## Docker Compose
@@ -74,37 +108,57 @@ docker/
 ### docker-compose.yml
 
 ```yaml
+# =============================================================================
+# Docker Compose конфигурация для OpenVPN LogServer.
+# =============================================================================
+# Сервисы:
+# - mysql: База данных MySQL 8.0
+# - openvpn-server: Сервер OpenVPN с генерацией PKI
+# - openvpn-client: Клиент OpenVPN для тестирования
+# - web: FastAPI приложение
+#
+# Инварианты:
+# - I9.1: docker-compose up поднимает все сервисы
+# - I9.2: OpenVPN сервер генерирует PKI при первом запуске
+# - I9.3: Клиент может подключиться к серверу
+# - I9.4: При подключении создается запись в БД
+# - I9.5: При отключении сессия закрывается
+# =============================================================================
+
 version: '3.8'
 
 services:
-  # MySQL Database
+  # MySQL база данных
   mysql:
     image: mysql:8.0
-    container_name: ovpn-mysql
+    container_name: openvpn-mysql
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
-      MYSQL_DATABASE: openvpn_logs
-      MYSQL_USER: ovpn_collector
-      MYSQL_PASSWORD: collectorpass
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openvpn_logs}
+      MYSQL_USER: ${MYSQL_USER:-openvpn}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-openvpn_password}
     ports:
       - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
-      - ovpn-network
+      - openvpn-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_password}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
-  # OpenVPN Server
+  # OpenVPN сервер
   openvpn-server:
     build:
-      context: ./openvpn-server
-      dockerfile: Dockerfile
-    container_name: ovpn-server
+      context: ../
+      dockerfile: docker/openvpn-server/Dockerfile
+    container_name: openvpn-server
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -112,105 +166,164 @@ services:
       - net.ipv4.ip_forward=1
     ports:
       - "1194:1194/udp"
-      - "7505:7505"  # Management interface
     volumes:
-      - shared_pki:/etc/openvpn/pki
-      - shared_ccd:/etc/openvpn/ccd
-      - shared_logs:/var/log/openvpn
-      - ./openvpn-server/scripts:/etc/openvpn/scripts:ro
+      - openvpn_pki:/etc/openvpn/pki
+      - openvpn_ccd:/etc/openvpn/ccd
+      - openvpn_certs:/etc/openvpn/certs
+      - ../config:/opt/openvpn-logserver/config:ro  # Монтируем конфигурацию
     networks:
-      - ovpn-network
+      - openvpn-network
+    environment:
+      - DB_PASSWORD=${MYSQL_PASSWORD:-openvpn_password}
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-openvpn}:${MYSQL_PASSWORD:-openvpn_password}@mysql:3306/${MYSQL_DATABASE:-openvpn_logs}
+      - OPENVPN_DIR=/etc/openvpn
+      - CERTS_DIR=/etc/openvpn/certs
+      - CRL_FILE=/etc/openvpn/pki/crl.pem
+      - CCD_DIR=/etc/openvpn/ccd
     depends_on:
       mysql:
         condition: service_healthy
-    environment:
-      DB_HOST: mysql
-      DB_NAME: openvpn_logs
-      DB_USER: ovpn_collector
-      DB_PASS: collectorpass
+    healthcheck:
+      test: ["CMD", "pgrep", "openvpn"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
-  # Application Server
-  app:
-    build:
-      context: ./app
-      dockerfile: Dockerfile
-    container_name: ovpn-app
-    ports:
-      - "8000:8000"
-    volumes:
-      - shared_pki:/etc/openvpn/pki:ro
-      - shared_ccd:/etc/openvpn/ccd:ro
-      - shared_logs:/var/log/openvpn:ro
-      - ../:/opt/openvpn-logserver:ro  # Монтируем код для разработки
-    networks:
-      - ovpn-network
-    depends_on:
-      mysql:
-        condition: service_healthy
-      openvpn-server:
-        condition: service_started
-    environment:
-      DB_HOST: mysql
-      DB_NAME: openvpn_logs
-      DB_USER: ovpn_collector
-      DB_PASS: collectorpass
-      APP_ENV: development
-    command: uvicorn web.main:app --host 0.0.0.0 --port 8000 --reload
-
-  # OpenVPN Client (для тестирования)
+  # OpenVPN клиент (для тестирования)
   openvpn-client:
     build:
-      context: ./openvpn-client
-      dockerfile: Dockerfile
-    container_name: ovpn-client
+      context: ../
+      dockerfile: docker/openvpn-client/Dockerfile
+    container_name: openvpn-client
     cap_add:
       - NET_ADMIN
+      - SYS_MODULE
     sysctls:
       - net.ipv4.ip_forward=1
     networks:
-      - ovpn-network
+      - openvpn-network
+    environment:
+      - OPENVPN_SERVER=openvpn-server
+      - OPENVPN_PORT=1194
     depends_on:
       - openvpn-server
-    environment:
-      CLIENT_NAME: test-client
     profiles:
-      - client  # Запускать явно: docker-compose --profile client up
+      - client
+    command: ["sleep", "infinity"]
+
+  # Web приложение (FastAPI)
+  web:
+    build:
+      context: ../
+      dockerfile: docker/web/Dockerfile
+    container_name: openvpn-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_PASSWORD=${MYSQL_PASSWORD:-openvpn_password}
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-openvpn}:${MYSQL_PASSWORD:-openvpn_password}@mysql:3306/${MYSQL_DATABASE:-openvpn_logs}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+    volumes:
+      - ../config:/opt/openvpn-logserver/config:ro  # Монтируем конфигурацию
+      - ../logs:/opt/openvpn-logserver/logs  # Логи
+    networks:
+      - openvpn-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   mysql_data:
-  shared_pki:
-  shared_ccd:
-  shared_logs:
+    driver: local
+  openvpn_pki:
+    driver: local
+  openvpn_ccd:
+    driver: local
+  openvpn_certs:
+    driver: local
 
 networks:
-  ovpn-network:
+  openvpn-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/16
 ```
 
-### .env
+## Конфигурация в Docker
 
-```bash
-# Database
-MYSQL_ROOT_PASSWORD=rootpass
-MYSQL_DATABASE=openvpn_logs
-MYSQL_USER=ovpn_collector
-MYSQL_PASSWORD=collectorpass
+### Структура конфигурации
 
-# App
-APP_ENV=development
-APP_SECRET_KEY=dev-secret-key-change-in-production
+В Docker-окружении используется централизованная конфигурация из файлов:
 
-# OpenVPN
-OVPN_SERVER_NET=10.8.0.0
-OVPN_SERVER_MASK=255.255.255.0
+```
+config/
+├── database.yaml    # Конфигурация БД (монтируется в контейнеры)
+└── web.yaml         # Конфигурация web-приложения
+```
+
+### Пример config/database.yaml для Docker
+
+```yaml
+# Конфигурация базы данных для Docker окружения
+database:
+  host: mysql
+  port: 3306
+  name: openvpn_logs
+  user: openvpn
+  password: ${DB_PASSWORD}  # Берется из переменной окружения
+
+  # Параметры пула соединений
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+
+  charset: utf8mb4
+```
+
+### Пример config/web.yaml для Docker
+
+```yaml
+# Конфигурация Web приложения для Docker окружения
+database:
+  pool_size: 10
+  max_overflow: 20
+
+app:
+  host: 0.0.0.0
+  port: 8000
+  workers: 2
+  secret_key: "docker-secret-key-change-in-production"
+  debug: false
+
+auth:
+  username: admin
+  password_hash: "$2b$12$your_bcrypt_hash_here_change_this"
+  session_timeout: 480
+
+logging:
+  level: INFO
+  file: /opt/openvpn-logserver/logs/web.log
+  max_bytes: 10485760
+  backup_count: 5
+
+pagination:
+  default_page_size: 25
+  max_page_size: 100
 ```
 
 ## Dockerfile для приложения
 
-### app/Dockerfile
+### docker/web/Dockerfile
 
 ```dockerfile
 FROM python:3.11-slim
@@ -221,68 +334,41 @@ RUN apt-get update && apt-get install -y \
     default-libmysqlclient-dev \
     pkg-config \
     netcat-traditional \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Рабочая директория
 WORKDIR /opt/openvpn-logserver
 
 # Копируем requirements
-COPY requirements.txt .
+COPY web/requirements.txt ./web/
+COPY database/requirements.txt ./database/
+COPY core/requirements.txt ./core/ 2>/dev/null || true
 
 # Устанавливаем Python зависимости
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r web/requirements.txt
+RUN pip install --no-cache-dir -r database/requirements.txt
 
-# Копируем entrypoint
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Копируем код приложения
+COPY web/ ./web/
+COPY core/ ./core/
+COPY database/ ./database/
+COPY collector/ ./collector/
+COPY config/ ./config/
+
+# Создаем директорию для логов
+RUN mkdir -p logs
 
 # Открываем порт
 EXPOSE 8000
 
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-```
-
-### app/requirements.txt
-
-```
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-jinja2==3.1.2
-sqlalchemy==2.0.23
-aiomysql==0.2.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
-python-multipart==0.0.6
-pyyaml==6.0.1
-requests==2.31.0
-cryptography==41.0.7
-pyopenssl==23.3.0
-mysqlclient==2.2.1
-```
-
-### app/entrypoint.sh
-
-```bash
-#!/bin/bash
-set -e
-
-echo "Waiting for MySQL..."
-while ! nc -z mysql 3306; do
-  sleep 1
-done
-echo "MySQL is up!"
-
-# Применяем миграции (если есть)
-# alembic upgrade head
-
-echo "Starting application..."
-exec "$@"
+# Запускаем приложение
+CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ## Dockerfile для OpenVPN сервера
 
-### openvpn-server/Dockerfile
+### docker/openvpn-server/Dockerfile
 
 ```dockerfile
 FROM debian:bookworm-slim
@@ -295,33 +381,39 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-mysqldb \
+    python3-yaml \
     net-tools \
     iputils-ping \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Устанавливаем Python библиотеки для скриптов
-RUN pip3 install requests --break-system-packages
+RUN pip3 install requests sqlalchemy pymysql --break-system-packages
 
 # Создаем директории
 RUN mkdir -p /etc/openvpn/pki /etc/openvpn/ccd /etc/openvpn/scripts /var/log/openvpn
 
 # Копируем конфигурацию
-COPY server.conf /etc/openvpn/server.conf
-COPY entrypoint.sh /entrypoint.sh
-COPY scripts/ /etc/openvpn/scripts/
+COPY docker/openvpn-server/server.conf /etc/openvpn/server.conf
+COPY docker/openvpn-server/entrypoint.sh /entrypoint.sh
+COPY docker/openvpn-server/scripts/ /etc/openvpn/scripts/
+
+# Копируем core модули для скриптов
+COPY core/ /opt/openvpn-logserver/core/
+COPY collector/ /opt/openvpn-logserver/collector/
+COPY config/ /opt/openvpn-logserver/config/
 
 RUN chmod +x /entrypoint.sh /etc/openvpn/scripts/*
 
 # PKI будет создан в entrypoint
 VOLUME ["/etc/openvpn/pki", "/etc/openvpn/ccd", "/var/log/openvpn"]
 
-EXPOSE 1194/udp 7505/tcp
+EXPOSE 1194/udp
 
 ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-### openvpn-server/server.conf
+### docker/openvpn-server/server.conf
 
 ```conf
 # Основные настройки
@@ -371,7 +463,7 @@ cipher AES-256-GCM
 auth SHA256
 ```
 
-### openvpn-server/entrypoint.sh
+### docker/openvpn-server/entrypoint.sh
 
 ```bash
 #!/bin/bash
@@ -448,126 +540,55 @@ echo "Starting OpenVPN server..."
 exec openvpn --config /etc/openvpn/server.conf
 ```
 
-### openvpn-server/scripts/client-connect
+### docker/openvpn-server/scripts/client-connect
 
 ```python
 #!/usr/bin/env python3
+"""
+Скрипт client-connect для OpenVPN в Docker окружении.
+Вызывается при подключении клиента.
+"""
 import os
 import sys
-import MySQLdb
-import requests
 
-def get_geoip(ip):
-    """Простой GeoIP без кэша для демо"""
-    try:
-        resp = requests.get(f'http://ip-api.com/json/{ip}', timeout=2)
-        data = resp.json()
-        if data.get('status') == 'success':
-            return data.get('country'), data.get('city')
-    except:
-        pass
-    return None, None
+# Добавляем путь к проекту
+sys.path.insert(0, '/opt/openvpn-logserver')
 
-def main():
-    cn = os.environ.get('common_name')
-    source_ip = os.environ.get('trusted_ip')
-    virtual_ip = os.environ.get('ifconfig_pool_remote_ip')
-    
-    if not cn:
-        sys.exit(0)
-    
-    try:
-        db = MySQLdb.connect(
-            host=os.environ.get('DB_HOST', 'mysql'),
-            user=os.environ.get('DB_USER', 'ovpn_collector'),
-            passwd=os.environ.get('DB_PASS', 'collectorpass'),
-            db=os.environ.get('DB_NAME', 'openvpn_logs')
-        )
-        cursor = db.cursor()
-        
-        # Создаем/получаем account
-        cursor.execute(
-            "INSERT INTO accounts (cn) VALUES (%s) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",
-            (cn,)
-        )
-        account_id = cursor.lastrowid
-        
-        # GeoIP
-        country, city = get_geoip(source_ip) if source_ip else (None, None)
-        
-        # Создаем сессию
-        cursor.execute("""
-            INSERT INTO sessions (account_id, connected_at, source_ip, country, city, virtual_ip, status)
-            VALUES (%s, NOW(), %s, %s, %s, %s, 'active')
-        """, (account_id, source_ip, country, city, virtual_ip))
-        
-        db.commit()
-        cursor.close()
-        db.close()
-        
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        # Не блокируем подключение
-    
-    sys.exit(0)
+# Устанавливаем переменные окружения для БД
+os.environ.setdefault('DB_PASSWORD', os.getenv('DB_PASSWORD', ''))
+
+from collector.client_connect import main
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
 ```
 
-### openvpn-server/scripts/client-disconnect
+### docker/openvpn-server/scripts/client-disconnect
 
 ```python
 #!/usr/bin/env python3
+"""
+Скрипт client-disconnect для OpenVPN в Docker окружении.
+Вызывается при отключении клиента.
+"""
 import os
 import sys
-import MySQLdb
 
-def main():
-    cn = os.environ.get('common_name')
-    bytes_sent = int(os.environ.get('bytes_sent', 0))
-    bytes_received = int(os.environ.get('bytes_received', 0))
-    
-    if not cn:
-        sys.exit(0)
-    
-    try:
-        db = MySQLdb.connect(
-            host=os.environ.get('DB_HOST', 'mysql'),
-            user=os.environ.get('DB_USER', 'ovpn_collector'),
-            passwd=os.environ.get('DB_PASS', 'collectorpass'),
-            db=os.environ.get('DB_NAME', 'openvpn_logs')
-        )
-        cursor = db.cursor()
-        
-        cursor.execute("""
-            UPDATE sessions s
-            JOIN accounts a ON a.id = s.account_id
-            SET s.disconnected_at = NOW(),
-                s.status = 'closed',
-                s.bytes_sent = %s,
-                s.bytes_received = %s
-            WHERE a.cn = %s AND s.status = 'active'
-            ORDER BY s.connected_at DESC
-            LIMIT 1
-        """, (bytes_sent, bytes_received, cn))
-        
-        db.commit()
-        cursor.close()
-        db.close()
-        
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-    
-    sys.exit(0)
+# Добавляем путь к проекту
+sys.path.insert(0, '/opt/openvpn-logserver')
+
+# Устанавливаем переменные окружения для БД
+os.environ.setdefault('DB_PASSWORD', os.getenv('DB_PASSWORD', ''))
+
+from collector.client_disconnect import main
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
 ```
 
 ## Dockerfile для OpenVPN клиента
 
-### openvpn-client/Dockerfile
+### docker/openvpn-client/Dockerfile
 
 ```dockerfile
 FROM debian:bookworm-slim
@@ -579,14 +600,14 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     && rm -rf /var/lib/apt/lists/*
 
-COPY client.conf.template /etc/openvpn/client.conf.template
-COPY entrypoint.sh /entrypoint.sh
+COPY docker/openvpn-client/client.conf /etc/openvpn/client.conf.template
+COPY docker/openvpn-client/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-### openvpn-client/client.conf.template
+### docker/openvpn-client/client.conf
 
 ```conf
 client
@@ -607,7 +628,7 @@ auth SHA256
 verb 3
 ```
 
-### openvpn-client/entrypoint.sh
+### docker/openvpn-client/entrypoint.sh
 
 ```bash
 #!/bin/bash
@@ -621,7 +642,7 @@ echo "Setting up OpenVPN client: $CLIENT_NAME"
 sleep 5
 
 # Копируем конфигурацию
-sed "s/CLIENT_NAME/$CLIENT_NAME/g" /etc/openvpn/client.conf.template > /etc/openvpn/client.conf
+cp /etc/openvpn/client.conf.template /etc/openvpn/client.conf
 
 # Копируем сертификаты с сервера (в реальном сценарии - через volumes)
 if [ -f /etc/openvpn/pki/ca.crt ]; then
@@ -636,7 +657,7 @@ exec openvpn --config /etc/openvpn/client.conf
 
 ## Инициализация БД
 
-### mysql/init.sql
+### docker/mysql/init.sql
 
 ```sql
 -- Создание базы и пользователя (делается через ENV в compose)
@@ -717,6 +738,22 @@ CREATE TABLE IF NOT EXISTS geoip_cache (
 # Переходим в директорию docker
 cd docker
 
+# Создаем файл конфигурации БД для Docker
+mkdir -p ../config
+cat > ../config/database.yaml <<EOF
+database:
+  host: mysql
+  port: 3306
+  name: openvpn_logs
+  user: openvpn
+  password: \${DB_PASSWORD}
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+  charset: utf8mb4
+EOF
+
 # Запускаем основные сервисы
 docker-compose up -d
 
@@ -728,6 +765,16 @@ docker-compose logs -f
 
 # Запускаем клиента для тестирования
 docker-compose --profile client up -d openvpn-client
+```
+
+### Применение миграций в Docker
+
+```bash
+# Запускаем миграции через контейнер web
+docker-compose exec web bash -c "cd database && alembic upgrade head"
+
+# Или с использованием DATABASE_URL
+docker-compose exec -e DATABASE_URL="mysql+pymysql://openvpn:openvpn_password@mysql:3306/openvpn_logs" web bash -c "cd database && alembic upgrade head"
 ```
 
 ### Доступ к сервисам
@@ -746,7 +793,7 @@ docker-compose --profile client up -d openvpn-client
 docker-compose exec openvpn-client openvpn --config /etc/openvpn/client.conf
 
 # Проверяем сессию в БД
-docker-compose exec mysql mysql -u ovpn_collector -pcollectorpass openvpn_logs -e "SELECT * FROM sessions;"
+docker-compose exec mysql mysql -u openvpn -popenvpn_password openvpn_logs -e "SELECT * FROM sessions;"
 
 # Проверяем в Web UI
 curl http://localhost:8000/api/v1/sessions/active
@@ -756,7 +803,7 @@ curl http://localhost:8000/api/v1/sessions/active
 
 ```bash
 # Вход в контейнер приложения
-docker-compose exec app bash
+docker-compose exec web bash
 
 # Вход в контейнер OpenVPN сервера
 docker-compose exec openvpn-server bash
@@ -777,5 +824,15 @@ docker-compose build --no-cache
 docker-compose up -d
 
 # Пересобрать только приложение
-docker-compose up -d --build app
+docker-compose up -d --build web
 ```
+
+## Отличия от production
+
+| Аспект | Docker (dev) | Production |
+|--------|--------------|------------|
+| Конфигурация | `config/database.yaml` монтируется | `config/database.yaml` в `/opt/openvpn-logserver/config/` |
+| Переменные окружения | Через `.env` и `environment` | Через systemd или `/etc/environment` |
+| Безопасность | Упрощенная | Полная (SELinux, AppArmor) |
+| SSL/TLS | Отсутствует | Nginx reverse proxy с SSL |
+| Логирование | stdout + файлы | syslog + файлы + rotation |

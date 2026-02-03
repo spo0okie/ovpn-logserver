@@ -137,9 +137,6 @@ def api_client(engine, tables):
         finally:
             pass
     
-    # Устанавливаем переменные окружения для авторизации
-    os.environ["API_USERS"] = "admin:admin,test:test123"
-    
     app.dependency_overrides[get_db] = _get_db_override
     
     with TestClient(app) as client:
@@ -157,7 +154,8 @@ def auth_headers():
     Returns:
         dict: Заголовки с Basic Auth
     """
-    credentials = base64.b64encode(b"admin:admin").decode("utf-8")
+    # Используем учетные данные из config/auth.yaml
+    credentials = base64.b64encode(b"admin:admin_password_123").decode("utf-8")
     return {"Authorization": f"Basic {credentials}"}
 
 

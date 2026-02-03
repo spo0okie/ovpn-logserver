@@ -1,0 +1,23 @@
+# Зависимости для модуля сбора данных (collector)
+
+# SQLAlchemy для работы с БД
+sqlalchemy>=2.0.0
+
+# Драйвер MySQL для Python
+pymysql>=1.1.0
+
+# Криптография для работы с сертификатами и PyMySQL
+cryptography>=41.0.0
+
+# Работа с сертификатами OpenSSL
+pyopenssl>=23.3.0
+
+# HTTP запросы для GeoIP
+requests>=2.31.0
+
+# YAML конфигурация
+pyyaml>=6.0.1
+
+# Зависимости для тестирования
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

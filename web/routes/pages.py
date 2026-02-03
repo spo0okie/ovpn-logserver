@@ -5,7 +5,6 @@ I8.1: UI использует только REST API (прямых запросо
 I8.2: Все страницы требуют аутентификации
 """
 
-import os
 import base64
 from datetime import datetime
 from typing import Optional
@@ -14,6 +13,8 @@ import requests
 from fastapi import APIRouter, Request, Depends, HTTPException, status, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+
+from core.config import get_web_auth_credentials
 
 
 router = APIRouter(tags=["pages"])
@@ -61,22 +62,30 @@ def get_auth_headers(request: Request) -> dict:
 def verify_credentials(username: str, password: str) -> bool:
     """
     Проверяет учетные данные пользователя.
-    
-    Использует ту же логику что и API auth.
+
+    Использует централизованную конфигурацию из config/auth.yaml.
+    I7.6: Аутентификация обязательна для всех endpoints.
+
+    Args:
+        username: Имя пользователя
+        password: Пароль
+
+    Returns:
+        bool: True если учетные данные верны
     """
-    api_users = os.getenv("API_USERS", "admin:admin")
-    
-    valid_users = {}
-    for user_pass in api_users.split(","):
-        if ":" in user_pass:
-            user, pwd = user_pass.split(":", 1)
-            valid_users[user] = pwd
-    
-    if username not in valid_users:
-        return False
-    
     import secrets
-    return secrets.compare_digest(password, valid_users[username])
+
+    # Получаем учетные данные из централизованной конфигурации
+    auth_config = get_web_auth_credentials()
+    valid_username = auth_config.get("username", "admin")
+    valid_password = auth_config.get("password", "admin_password_123")
+
+    # Проверяем username
+    if not secrets.compare_digest(username, valid_username):
+        return False
+
+    # Проверяем password (константное время для предотвращения timing attacks)
+    return secrets.compare_digest(password, valid_password)
 
 
 # =============================================================================

@@ -81,23 +81,41 @@
                         </td>
                         <td>
                             {% if account.valid_from %}
-                                {{ account.valid_from.strftime('%Y-%m-%d') }}
+                                {% if account.valid_from is string %}
+                                    {{ account.valid_from[:10] }}
+                                {% else %}
+                                    {{ account.valid_from.strftime('%Y-%m-%d') }}
+                                {% endif %}
                             {% else %}
                                 <span class="text-muted">-</span>
                             {% endif %}
                         </td>
                         <td>
                             {% if account.valid_to %}
-                                {% if account.valid_to < now %}
-                                    <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
+                                {% if account.valid_to is string %}
+                                    {% if account.valid_to[:10] < now.strftime('%Y-%m-%d') %}
+                                        <span class="text-danger">{{ account.valid_to[:10] }} (Expired)</span>
+                                    {% else %}
+                                        {{ account.valid_to[:10] }}
+                                    {% endif %}
                                 {% else %}
-                                    {{ account.valid_to.strftime('%Y-%m-%d') }}
+                                    {% if account.valid_to.strftime('%Y-%m-%d') < now.strftime('%Y-%m-%d') %}
+                                        <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
+                                    {% else %}
+                                        {{ account.valid_to.strftime('%Y-%m-%d') }}
+                                    {% endif %}
                                 {% endif %}
                             {% else %}
                                 <span class="text-muted">-</span>
                             {% endif %}
                         </td>
-                        <td>{{ account.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td>
+                            {% if account.created_at is string %}
+                                {{ account.created_at[:10] }}
+                            {% else %}
+                                {{ account.created_at.strftime('%Y-%m-%d') }}
+                            {% endif %}
+                        </td>
                         <td class="table-actions">
                             <a href="/accounts/{{ account.cn }}" class="btn btn-sm btn-outline-primary">
                                 <i class="bi bi-eye"></i> View

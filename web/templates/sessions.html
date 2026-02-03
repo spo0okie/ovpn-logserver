@@ -83,7 +83,13 @@
                                 <i class="bi bi-person-circle text-primary"></i> {{ session.account_cn }}
                             </a>
                         </td>
-                        <td>{{ session.connected_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>
+                            {% if session.connected_at is string %}
+                                {{ session.connected_at[:16] }}
+                            {% else %}
+                                {{ session.connected_at.strftime('%Y-%m-%d %H:%M') }}
+                            {% endif %}
+                        </td>
                         <td>
                             {% if session.duration_seconds %}
                                 {% set hours = session.duration_seconds // 3600 %}

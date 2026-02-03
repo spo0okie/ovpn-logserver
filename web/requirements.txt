@@ -1,0 +1,40 @@
+# Зависимости для Web приложения (FastAPI)
+
+# FastAPI фреймворк
+fastapi>=0.104.1
+
+# ASGI сервер
+uvicorn[standard]>=0.24.0
+
+# Шаблонизатор Jinja2 для HTML
+jinja2>=3.1.2
+
+# SQLAlchemy для работы с БД
+sqlalchemy>=2.0.0
+
+# Асинхронный драйвер MySQL
+aiomysql>=0.2.0
+
+# Pydantic для валидации данных
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Для работы с формами
+python-multipart>=0.0.6
+
+# YAML конфигурация
+pyyaml>=6.0.1
+
+# HTTP запросы
+requests>=2.31.0
+
+# Криптография для аутентификации
+cryptography>=41.0.0
+
+# Драйвер MySQL для синхронных операций (для совместимости)
+pymysql>=1.1.0
+
+# Зависимости для тестирования
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0

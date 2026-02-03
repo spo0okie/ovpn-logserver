@@ -14,6 +14,7 @@ Create Date: 2026-01-31 10:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
 
 # revision identifiers, used by Alembic.
 revision = '001'
@@ -31,7 +32,7 @@ def upgrade() -> None:
     # Таблица accounts - справочник аккаунтов OpenVPN
     op.create_table(
         'accounts',
-        sa.Column('id', sa.Integer(unsigned=True), autoincrement=True, nullable=False),
+        sa.Column('id', mysql.INTEGER(unsigned=True), autoincrement=True, nullable=False),
         sa.Column('cn', sa.String(length=255), nullable=False, comment='Common Name сертификата'),
         sa.Column('valid_from', sa.DateTime(), nullable=True, comment='Срок начала действия сертификата'),
         sa.Column('valid_to', sa.DateTime(), nullable=True, comment='Срок окончания действия сертификата'),
@@ -55,16 +56,16 @@ def upgrade() -> None:
     # Таблица sessions - журнал VPN сессий
     op.create_table(
         'sessions',
-        sa.Column('id', sa.BigInteger(unsigned=True), autoincrement=True, nullable=False),
-        sa.Column('account_id', sa.Integer(unsigned=True), nullable=False),
+        sa.Column('id', mysql.BIGINT(unsigned=True), autoincrement=True, nullable=False),
+        sa.Column('account_id', mysql.INTEGER(unsigned=True), nullable=False),
         sa.Column('session_id', sa.String(length=100), nullable=True, comment='Внутренний ID сессии OpenVPN'),
         sa.Column('connected_at', sa.DateTime(), nullable=False, comment='Время подключения'),
         sa.Column('disconnected_at', sa.DateTime(), nullable=True, comment='Время отключения (NULL = активна)'),
         sa.Column('source_ip', sa.String(length=45), nullable=False, comment='IP источника (IPv4/IPv6)'),
         sa.Column('country', sa.String(length=100), nullable=True, comment='Страна по GeoIP'),
         sa.Column('city', sa.String(length=100), nullable=True, comment='Город по GeoIP'),
-        sa.Column('bytes_sent', sa.BigInteger(unsigned=True), nullable=False, server_default=sa.text('0'), comment='Отправлено байт'),
-        sa.Column('bytes_received', sa.BigInteger(unsigned=True), nullable=False, server_default=sa.text('0'), comment='Получено байт'),
+        sa.Column('bytes_sent', mysql.BIGINT(unsigned=True), nullable=False, server_default=sa.text('0'), comment='Отправлено байт'),
+        sa.Column('bytes_received', mysql.BIGINT(unsigned=True), nullable=False, server_default=sa.text('0'), comment='Получено байт'),
         sa.Column('virtual_ip', sa.String(length=45), nullable=True, comment='Выделенный VPN IP клиента'),
         sa.Column(
             'status',
@@ -90,8 +91,8 @@ def upgrade() -> None:
     # Таблица connection_attempts - неудачные попытки подключения
     op.create_table(
         'connection_attempts',
-        sa.Column('id', sa.BigInteger(unsigned=True), autoincrement=True, nullable=False),
-        sa.Column('account_id', sa.Integer(unsigned=True), nullable=True, comment='ID аккаунта (NULL если не удалось определить)'),
+        sa.Column('id', mysql.BIGINT(unsigned=True), autoincrement=True, nullable=False),
+        sa.Column('account_id', mysql.INTEGER(unsigned=True), nullable=True, comment='ID аккаунта (NULL если не удалось определить)'),
         sa.Column('attempted_at', sa.DateTime(), nullable=False, comment='Время попытки'),
         sa.Column('source_ip', sa.String(length=45), nullable=False, comment='IP источника'),
         sa.Column('cert_cn', sa.String(length=255), nullable=True, comment='CN из предъявленного сертификата'),

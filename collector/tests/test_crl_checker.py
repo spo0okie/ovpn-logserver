@@ -135,35 +135,35 @@ class TestI62CrlUpdatesRevocation:
     def test_crl_marks_revoked(self, db, tmp_path, mocker):
         """
         Тест I6.2: Пометка отозванных сертификатов.
-        
+
         Проверяем что check_crl корректно отмечает is_revoked=True
-        для сертификатов в CRL.
+        для сертификатов в CRL. Теперь используется serial_number из account.
         """
         now = datetime.utcnow()
-        
+
         # Создаем сертификат
         cert_path, serial = create_test_certificate('revoked_client', now, now + timedelta(days=365), tmp_path)
-        
+
         # Создаем CRL с этим сертификатом
-        # Для упрощения теста используем CN как ключ (в реальности - серийный номер)
         revoked_at = now - timedelta(days=1)
         crl_path = create_test_crl({serial: revoked_at}, tmp_path)
-        
-        # Создаем account
-        account = Account(cn='revoked_client', is_revoked=False)
+
+        # Создаем account с правильным serial_number (как строка)
+        account = Account(cn='revoked_client', serial_number=str(serial), is_revoked=False)
         db.add(account)
         db.commit()
-        
+
         # Мокаем CRL_FILE и CERTS_DIR
         mocker.patch('collector.crl_checker.CRL_FILE', crl_path)
         mocker.patch('collector.crl_checker.CERTS_DIR', str(tmp_path))
-        
+
         # Запускаем проверку CRL
         stats = check_crl(db)
-        
+
         # Проверяем статистику
         assert stats['checked'] == 1
-        
+        assert stats['revoked'] == 1
+
         # Проверяем что account помечен как отозванный
         db.refresh(account)
         assert account.is_revoked is True
@@ -212,44 +212,46 @@ class TestI62CrlUpdatesRevocation:
     def test_crl_multiple_accounts(self, db, tmp_path, mocker):
         """
         Тест I6.2: Проверка нескольких accounts.
+        Теперь используется serial_number из account напрямую.
         """
         now = datetime.utcnow()
-        
+
         # Создаем сертификаты
         cert1_path, serial1 = create_test_certificate('client1', now, now + timedelta(days=365), tmp_path)
         cert2_path, serial2 = create_test_certificate('client2', now, now + timedelta(days=365), tmp_path)
         cert3_path, serial3 = create_test_certificate('client3', now, now + timedelta(days=365), tmp_path)
-        
+
         # Создаем CRL только с client1 и client2
         crl_path = create_test_crl({
             serial1: now - timedelta(days=1),
             serial2: now - timedelta(days=2),
         }, tmp_path)
-        
-        # Создаем accounts
-        account1 = Account(cn='client1', is_revoked=False)
-        account2 = Account(cn='client2', is_revoked=False)
-        account3 = Account(cn='client3', is_revoked=False)
+
+        # Создаем accounts с правильными serial_number
+        account1 = Account(cn='client1', serial_number=str(serial1), is_revoked=False)
+        account2 = Account(cn='client2', serial_number=str(serial2), is_revoked=False)
+        account3 = Account(cn='client3', serial_number=str(serial3), is_revoked=False)
         db.add(account1)
         db.add(account2)
         db.add(account3)
         db.commit()
-        
+
         # Мокаем CRL_FILE и CERTS_DIR
         mocker.patch('collector.crl_checker.CRL_FILE', crl_path)
         mocker.patch('collector.crl_checker.CERTS_DIR', str(tmp_path))
-        
+
         # Запускаем проверку CRL
         stats = check_crl(db)
-        
+
         # Проверяем статистику
         assert stats['checked'] == 3
-        
+        assert stats['revoked'] == 2
+
         # Проверяем статусы
         db.refresh(account1)
         db.refresh(account2)
         db.refresh(account3)
-        
+
         assert account1.is_revoked is True
         assert account2.is_revoked is True
         assert account3.is_revoked is False  # Не в CRL
@@ -267,37 +269,38 @@ class TestI64Idempotency:
     def test_crl_check_idempotent(self, db, tmp_path, mocker):
         """
         Тест I6.4: Идемпотентность crl_checker.
-        
+
         Проверяем что повторный запуск не ломает данные.
+        Теперь используется serial_number из account напрямую.
         """
         now = datetime.utcnow()
-        
+
         # Создаем сертификат
         cert_path, serial = create_test_certificate('client', now, now + timedelta(days=365), tmp_path)
-        
+
         # Создаем CRL
         revoked_at = now - timedelta(days=1)
         crl_path = create_test_crl({serial: revoked_at}, tmp_path)
-        
-        # Создаем account
-        account = Account(cn='client', is_revoked=False)
+
+        # Создаем account с правильным serial_number
+        account = Account(cn='client', serial_number=str(serial), is_revoked=False)
         db.add(account)
         db.commit()
-        
+
         # Мокаем CRL_FILE и CERTS_DIR
         mocker.patch('collector.crl_checker.CRL_FILE', crl_path)
         mocker.patch('collector.crl_checker.CERTS_DIR', str(tmp_path))
-        
+
         # Первый запуск
         stats1 = check_crl(db)
         assert stats1['revoked'] == 1
-        
+
         db.refresh(account)
         first_revoked_at = account.revoked_at
-        
+
         # Второй запуск (идемпотентность)
         stats2 = check_crl(db)
-        
+
         # Проверяем что данные не сломались
         db.refresh(account)
         assert account.is_revoked is True

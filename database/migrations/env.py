@@ -2,6 +2,7 @@
 Конфигурация Alembic для управления миграциями базы данных.
 
 Этот файл настраивает окружение Alembic для выполнения миграций.
+Использует централизованную конфигурацию из core.config.
 """
 
 import os
@@ -36,18 +37,18 @@ target_metadata = None
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
-# Получаем URL базы данных из переменной окружения или используем дефолтный
-DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "mysql+pymysql://openvpn_user:openvpn_password@localhost/openvpn_logs"
-)
+# Импортируем централизованную конфигурацию
+from core.config import get_database_url
+
+# Получаем URL базы данных из централизованной конфигурации
+DB_URL = get_database_url()
 
 
 def run_migrations_offline() -> None:
     """
     Запуск миграций в 'offline' режиме.
 
-n    В этом режиме URL базы данных передаётся напрямую,
+    В этом режиме URL базы данных передаётся напрямую,
     и соединение не создаётся.
     """
     url = config.get_main_option("sqlalchemy.url", DB_URL)
@@ -68,10 +69,9 @@ def run_migrations_online() -> None:
 
     В этом режиме создаётся Engine и устанавливается соединение с БД.
     """
-    # Переопределяем URL из переменной окружения если она задана
+    # Используем URL из централизованной конфигурации
     configuration = config.get_section(config.config_ini_section, {})
-    if os.environ.get("DATABASE_URL"):
-        configuration["sqlalchemy.url"] = os.environ.get("DATABASE_URL")
+    configuration["sqlalchemy.url"] = DB_URL
 
     connectable = engine_from_config(
         configuration,

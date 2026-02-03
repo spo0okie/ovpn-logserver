@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.models import Account, Session
 
 # Импортируем тестируемый модуль
-from collector.client_disconnect import client_disconnect, get_env_vars, close_active_session
+from collector.client_disconnect import client_disconnect, get_env_vars, close_active_session, main
 
 
 @pytest.fixture
@@ -440,6 +440,21 @@ class TestI55_ExitZeroOnError:
         assert session.status == 'closed'
         assert session.bytes_sent == 0
         assert session.bytes_received == 0
+
+    def test_main_always_returns_zero(self, env, mocker):
+        """
+        Тест I5.5: main() всегда возвращает 0 даже при фатальной ошибке.
+        """
+        # Мокаем client_disconnect чтобы он выбросил исключение
+        mock_client_disconnect = mocker.patch(
+            'collector.client_disconnect.client_disconnect',
+            side_effect=Exception('Fatal error')
+        )
+
+        result = main()
+
+        # I5.5: Не блокируем VPN при любой ошибке
+        assert result == 0
 
 
 # =============================================================================

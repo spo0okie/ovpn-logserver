@@ -49,16 +49,29 @@ class AccountBase(BaseModel):
         from_attributes = True
 
 
-class AccountListItem(BaseModel):
-    """Элемент списка аккаунтов."""
+class CertificateItem(BaseModel):
+    """Информация о сертификате пользователя."""
 
     id: int
-    cn: str
+    serial_number: str
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
     is_revoked: bool
-    has_ccd: bool
-    created_at: datetime
+    revoked_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AccountListItem(BaseModel):
+    """Элемент списка аккаунтов с агрегированными данными."""
+
+    cn: str  # Теперь группируем по CN
+    cert_count: int  # Общее количество сертификатов
+    active_certs: int  # Количество активных сертификатов
+    has_active_cert: bool  # Есть ли хотя бы один активный сертификат
+    has_ccd: bool  # Есть ли CCD для этого CN
+    created_at: Optional[datetime] = None  # Дата создания первого сертификата
 
     class Config:
         from_attributes = True
@@ -78,18 +91,14 @@ class AccountLastSession(BaseModel):
 
 
 class AccountDetail(BaseModel):
-    """Детальная информация об аккаунте."""
+    """Детальная информация об аккаунте с списком сертификатов."""
 
-    id: int
-    cn: str
-    valid_from: Optional[datetime] = None
-    valid_to: Optional[datetime] = None
-    is_revoked: bool
-    revoked_at: Optional[datetime] = None
-    has_ccd: bool
-    can_connect: bool
-    created_at: datetime
-    updated_at: datetime
+    cn: str  # Common Name пользователя
+    certificates: List[CertificateItem]  # Список всех сертификатов
+    cert_count: int  # Общее количество сертификатов
+    active_certs: int  # Количество активных сертификатов
+    can_connect: bool  # Может ли пользователь подключаться
+    has_ccd: bool  # Есть ли CCD для этого CN
     last_session: Optional[AccountLastSession] = None
 
 
@@ -238,11 +247,12 @@ class AttemptListResponse(BaseModel):
 class AccountsStats(BaseModel):
     """Статистика аккаунтов."""
 
-    total: int
-    active_certs: int
-    revoked: int
-    with_ccd: int
-    expiring_soon: int
+    total_users: int  # Уникальные CN (пользователи)
+    total_certs: int  # Всего сертификатов
+    active_certs: int  # Активные сертификаты
+    revoked: int  # Отозванные сертификаты
+    with_ccd: int  # Пользователи с CCD
+    expiring_soon: int  # Скоро истекают
 
 
 class SessionsStats(BaseModel):

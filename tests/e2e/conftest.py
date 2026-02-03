@@ -86,36 +86,37 @@ def db(engine, tables):
     Yields:
         Session: SQLAlchemy сессия
     """
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+    # Для E2E тестов используем реальную сессию (не транзакцию с rollback)
+    # чтобы API мог видеть данные
+    Session = sessionmaker(bind=engine)
+    session = Session()
     
     yield session
     
     session.close()
-    transaction.rollback()
-    connection.close()
 
 
 @pytest.fixture(scope="function")
-def api_client(db):
+def api_client(engine, tables):
     """
     Создает тестовый клиент для API.
     
     Args:
-        db: Сессия БД
+        engine: SQLAlchemy engine
+        tables: Фикстура создания таблиц
     
     Yields:
         TestClient: Клиент для тестирования API
     """
+    # Создаем новую сессию для API
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    
     def _get_db_override():
         try:
             yield db
         finally:
             pass
-    
-    # Устанавливаем переменные окружения для авторизации
-    os.environ["API_USERS"] = "admin:admin,test:test123"
     
     app.dependency_overrides[get_db] = _get_db_override
     
@@ -123,6 +124,7 @@ def api_client(db):
         yield client
     
     app.dependency_overrides.clear()
+    db.close()
 
 
 @pytest.fixture
@@ -133,7 +135,8 @@ def auth_headers():
     Returns:
         dict: Заголовки с Basic Auth
     """
-    credentials = base64.b64encode(b"admin:admin").decode("utf-8")
+    # Используем учетные данные из config/auth.yaml
+    credentials = base64.b64encode(b"admin:admin_password_123").decode("utf-8")
     return {"Authorization": f"Basic {credentials}"}
 
 
@@ -148,16 +151,21 @@ class E2EVPNSimulator:
     - Синхронизация сертификатов
     """
     
-    def __init__(self, db_session: Session):
+    def __init__(self, engine):
         """
         Инициализация симулятора.
         
         Args:
-            db_session: Сессия БД для записи данных
+            engine: SQLAlchemy engine для создания сессий
         """
-        self.db = db_session
+        self.engine = engine
         self._connected_users = {}
         self._session_counter = 0
+    
+    def _get_db(self):
+        """Создает новую сессию БД."""
+        Session = sessionmaker(bind=self.engine)
+        return Session()
     
     def connect(self, cn: str, source_ip: str, virtual_ip: str = None, 
                 country: str = None, city: str = None) -> dict:
@@ -200,16 +208,20 @@ class E2EVPNSimulator:
         with patch.dict(os.environ, env_vars, clear=False):
             from collector.client_connect import create_or_get_account, create_session
             
-            # Мокаем GeoIP если указаны страна/город
-            if country or city:
-                geo = {'country': country, 'city': city}
-                account = create_or_get_account(self.db, cn)
-                create_session(self.db, account.id, env_vars, geo)
-            else:
-                from core.geoip import resolve_geoip
-                account = create_or_get_account(self.db, cn)
-                geo = resolve_geoip(source_ip, self.db)
-                create_session(self.db, account.id, env_vars, geo)
+            db = self._get_db()
+            try:
+                # Мокаем GeoIP если указаны страна/город
+                if country or city:
+                    geo = {'country': country, 'city': city}
+                    account = create_or_get_account(db, cn)
+                    create_session(db, account.id, env_vars, geo)
+                else:
+                    from core.geoip import resolve_geoip
+                    account = create_or_get_account(db, cn)
+                    geo = resolve_geoip(source_ip, db)
+                    create_session(db, account.id, env_vars, geo)
+            finally:
+                db.close()
         
         return self._connected_users[cn]
     
@@ -243,7 +255,12 @@ class E2EVPNSimulator:
         # Вызываем client_disconnect с подменой окружения
         with patch.dict(os.environ, env_vars, clear=False):
             from collector.client_disconnect import close_active_session
-            close_active_session(self.db, cn, bytes_sent, bytes_received)
+            
+            db = self._get_db()
+            try:
+                close_active_session(db, cn, bytes_sent, bytes_received)
+            finally:
+                db.close()
         
         user_info['disconnected_at'] = datetime.utcnow()
         user_info['bytes_sent'] = bytes_sent
@@ -287,27 +304,27 @@ class E2EVPNSimulator:
 
 
 @pytest.fixture
-def e2e_vpn_simulator(db):
+def e2e_vpn_simulator(engine):
     """
     Создает E2E симулятор VPN.
     
     Args:
-        db: Сессия БД
+        engine: SQLAlchemy engine
     
     Yields:
         E2EVPNSimulator: Экземпляр симулятора
     """
-    simulator = E2EVPNSimulator(db)
+    simulator = E2EVPNSimulator(engine)
     yield simulator
 
 
 @pytest.fixture
-def e2e_data_factory(db):
+def e2e_data_factory(engine):
     """
     Фабрика для создания E2E тестовых данных.
     
     Args:
-        db: Сессия БД
+        engine: SQLAlchemy engine
     
     Returns:
         E2EDataFactory: Фабрика тестовых данных
@@ -315,9 +332,14 @@ def e2e_data_factory(db):
     class E2EDataFactory:
         """Фабрика для создания комплексных E2E тестовых данных."""
         
-        def __init__(self, db_session: Session):
-            self.db = db_session
+        def __init__(self, engine):
+            self.engine = engine
             self._counter = 0
+        
+        def _get_db(self):
+            """Создает новую сессию БД."""
+            Session = sessionmaker(bind=self.engine)
+            return Session()
         
         def create_complete_account(self, cn: str = None, **kwargs):
             """
@@ -331,19 +353,23 @@ def e2e_data_factory(db):
             self._counter += 1
             cn = cn or f"e2e_user_{self._counter}"
             
-            account = Account(
-                cn=cn,
-                valid_from=kwargs.get('valid_from', datetime.utcnow() - timedelta(days=365)),
-                valid_to=kwargs.get('valid_to', datetime.utcnow() + timedelta(days=365)),
-                is_revoked=kwargs.get('is_revoked', False),
-                has_ccd=kwargs.get('has_ccd', True),
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            self.db.add(account)
-            self.db.commit()
-            self.db.refresh(account)
-            return account
+            db = self._get_db()
+            try:
+                account = Account(
+                    cn=cn,
+                    valid_from=kwargs.get('valid_from', datetime.utcnow() - timedelta(days=365)),
+                    valid_to=kwargs.get('valid_to', datetime.utcnow() + timedelta(days=365)),
+                    is_revoked=kwargs.get('is_revoked', False),
+                    has_ccd=kwargs.get('has_ccd', True),
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(account)
+                db.commit()
+                db.refresh(account)
+                return account
+            finally:
+                db.close()
         
         def create_session_history(self, account, num_sessions: int = 3):
             """
@@ -358,33 +384,37 @@ def e2e_data_factory(db):
             """
             from core.models import Session as SessionModel
             
-            sessions = []
-            for i in range(num_sessions):
-                self._counter += 1
+            db = self._get_db()
+            try:
+                sessions = []
+                for i in range(num_sessions):
+                    self._counter += 1
+                    
+                    # Чередуем активные и закрытые сессии
+                    is_active = (i == num_sessions - 1)
+                    
+                    session = SessionModel(
+                        account_id=account.id,
+                        session_id=f"e2e_sess_{self._counter}",
+                        connected_at=datetime.utcnow() - timedelta(days=num_sessions-i),
+                        disconnected_at=None if is_active else datetime.utcnow() - timedelta(days=num_sessions-i-1),
+                        source_ip=f"192.168.{self._counter//256}.{self._counter%256}",
+                        country="Russia",
+                        city="Moscow",
+                        bytes_sent=1000 * (i + 1),
+                        bytes_received=2000 * (i + 1),
+                        virtual_ip=f"10.8.0.{self._counter}",
+                        status="active" if is_active else "closed"
+                    )
+                    db.add(session)
+                    sessions.append(session)
                 
-                # Чередуем активные и закрытые сессии
-                is_active = (i == num_sessions - 1)
-                
-                session = SessionModel(
-                    account_id=account.id,
-                    session_id=f"e2e_sess_{self._counter}",
-                    connected_at=datetime.utcnow() - timedelta(days=num_sessions-i),
-                    disconnected_at=None if is_active else datetime.utcnow() - timedelta(days=num_sessions-i-1),
-                    source_ip=f"192.168.{self._counter//256}.{self._counter%256}",
-                    country="Russia",
-                    city="Moscow",
-                    bytes_sent=1000 * (i + 1),
-                    bytes_received=2000 * (i + 1),
-                    virtual_ip=f"10.8.0.{self._counter}",
-                    status="active" if is_active else "closed"
-                )
-                self.db.add(session)
-                sessions.append(session)
-            
-            self.db.commit()
-            for s in sessions:
-                self.db.refresh(s)
-            return sessions
+                db.commit()
+                for s in sessions:
+                    db.refresh(s)
+                return sessions
+            finally:
+                db.close()
         
         def create_failed_attempts(self, account=None, num_attempts: int = 3):
             """
@@ -399,27 +429,31 @@ def e2e_data_factory(db):
             """
             from core.models import ConnectionAttempt
             
-            attempts = []
-            failure_types = ["auth_failed", "cert_revoked", "ccd_missing"]
-            
-            for i in range(num_attempts):
-                self._counter += 1
+            db = self._get_db()
+            try:
+                attempts = []
+                failure_types = ["auth_failed", "cert_revoked", "ccd_missing"]
                 
-                attempt = ConnectionAttempt(
-                    account_id=account.id if account else None,
-                    attempted_at=datetime.utcnow() - timedelta(hours=i+1),
-                    source_ip=f"10.0.{self._counter//256}.{self._counter%256}",
-                    cert_cn=account.cn if account else f"unknown_{self._counter}",
-                    failure_reason=f"E2E test failure {i}",
-                    failure_type=failure_types[i % len(failure_types)],
-                    details=f"E2E test details {i}"
-                )
-                self.db.add(attempt)
-                attempts.append(attempt)
-            
-            self.db.commit()
-            for a in attempts:
-                self.db.refresh(a)
-            return attempts
+                for i in range(num_attempts):
+                    self._counter += 1
+                    
+                    attempt = ConnectionAttempt(
+                        account_id=account.id if account else None,
+                        attempted_at=datetime.utcnow() - timedelta(hours=i+1),
+                        source_ip=f"10.0.{self._counter//256}.{self._counter%256}",
+                        cert_cn=account.cn if account else f"unknown_{self._counter}",
+                        failure_reason=f"E2E test failure {i}",
+                        failure_type=failure_types[i % len(failure_types)],
+                        details=f"E2E test details {i}"
+                    )
+                    db.add(attempt)
+                    attempts.append(attempt)
+                
+                db.commit()
+                for a in attempts:
+                    db.refresh(a)
+                return attempts
+            finally:
+                db.close()
     
-    return E2EDataFactory(db)
+    return E2EDataFactory(engine)

@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenVPN Data Sync
+Documentation=https://github.com/yourorg/openvpn-logserver
+After=mysql.service
+
+[Service]
+Type=oneshot
+# Работа от root (упрощенная установка)
+User=root
+Group=root
+WorkingDirectory=/opt/openvpn-logserver
+
+Environment=PYTHONPATH=/opt/openvpn-logserver
+# Пароль БД больше не требуется в переменных окружения - читается из config/database.yaml
+
+# Запуск через отдельный Python-скрипт
+ExecStart=/usr/bin/python3 /opt/openvpn-logserver/collector/sync_all.py
+
+[Install]
+WantedBy=multi-user.target

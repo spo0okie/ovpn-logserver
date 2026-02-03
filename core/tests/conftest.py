@@ -97,15 +97,16 @@ def db_session(engine, tables):
 def sample_account(db_session: Session) -> Account:
     """
     Фикстура создает тестовый аккаунт.
-    
+
     Args:
         db_session: Сессия БД
-    
+
     Returns:
         Account: Созданный аккаунт
     """
     account = Account(
         cn="test_user",
+        serial_number="TEST001",
         valid_from=datetime.utcnow(),
         valid_to=datetime.utcnow() + timedelta(days=365),
         is_revoked=False,

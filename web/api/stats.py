@@ -42,18 +42,26 @@ def get_overview_stats(
     """
     Общая статистика.
 
+    Поддержка нескольких сертификатов на пользователя:
+    - total_users: уникальные CN (пользователи)
+    - total_certs: всего сертификатов
+    - active_certs: активные сертификаты
+
     I7.1: Только SELECT запросы с агрегацией
     """
     # I7.1: Только SELECT запросы с COUNT
-    # Статистика по аккаунтам
-    total_accounts = db.query(func.count(Account.id)).scalar() or 0
+    # Статистика по аккаунтам (группировка по CN)
+    total_users = db.query(func.count(distinct(Account.cn))).scalar() or 0
+    total_certs = db.query(func.count(Account.id)).scalar() or 0
     active_certs = db.query(func.count(Account.id)).filter(
         Account.is_revoked == False
     ).scalar() or 0
     revoked_certs = db.query(func.count(Account.id)).filter(
         Account.is_revoked == True
     ).scalar() or 0
-    with_ccd = db.query(func.count(Account.id)).filter(
+
+    # Пользователи с CCD (хотя бы один сертификат с has_ccd=True)
+    with_ccd = db.query(func.count(distinct(Account.cn))).filter(
         Account.has_ccd == True
     ).scalar() or 0
 
@@ -98,7 +106,8 @@ def get_overview_stats(
 
     return {
         "accounts": {
-            "total": total_accounts,
+            "total_users": total_users,
+            "total_certs": total_certs,
             "active_certs": active_certs,
             "revoked": revoked_certs,
             "with_ccd": with_ccd,

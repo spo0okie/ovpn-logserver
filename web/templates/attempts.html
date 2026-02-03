@@ -65,9 +65,15 @@
                     {% for attempt in attempts.data %}
                     <tr>
                         <td>
-                            {{ attempt.attempted_at.strftime('%Y-%m-%d %H:%M:%S') }}
-                            <br>
-                            <small class="text-muted">{{ attempt.attempted_at.strftime('%Z') }}</small>
+                            {% if attempt.attempted_at is string %}
+                                {{ attempt.attempted_at[:19] }}
+                                <br>
+                                <small class="text-muted">{{ attempt.attempted_at[20:25] if attempt.attempted_at|length > 20 else 'UTC' }}</small>
+                            {% else %}
+                                {{ attempt.attempted_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                <br>
+                                <small class="text-muted">{{ attempt.attempted_at.strftime('%Z') }}</small>
+                            {% endif %}
                         </td>
                         <td>
                             {% if attempt.account.cn %}

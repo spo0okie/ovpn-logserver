@@ -44,10 +44,14 @@ from .database import Base
 class Account(Base):
     """
     Модель для таблицы accounts - справочник аккаунтов OpenVPN.
-    
+
+    Поддерживает несколько сертификатов с одним CN (Common Name).
+    Уникальность обеспечивается парой (cn, serial_number).
+
     Attributes:
         id: Первичный ключ (INT UNSIGNED AUTO_INCREMENT)
-        cn: Common Name из сертификата (VARCHAR 255, UNIQUE)
+        cn: Common Name из сертификата (VARCHAR 255)
+        serial_number: Серийный номер сертификата (VARCHAR 64)
         valid_from: Дата начала действия сертификата
         valid_to: Дата окончания действия сертификата
         is_revoked: Флаг отзыва сертификата
@@ -59,9 +63,9 @@ class Account(Base):
         sessions: Связанные VPN сессии
         connection_attempts: Связанные попытки подключения
     """
-    
+
     __tablename__ = "accounts"  # I2.2: Имя таблицы совпадает со схемой БД
-    
+
     # I2.3: Типы данных соответствуют SQL типам
     id: Mapped[int] = mapped_column(
         get_int_type(unsigned=True, autoincrement=True),  # INT UNSIGNED AUTO_INCREMENT
@@ -71,6 +75,11 @@ class Account(Base):
     cn: Mapped[str] = mapped_column(
         String(255),  # VARCHAR(255)
         nullable=False
+    )
+    serial_number: Mapped[str] = mapped_column(
+        String(64),  # VARCHAR(64)
+        nullable=False,
+        default="unknown"
     )
     valid_from: Mapped[Optional[datetime]] = mapped_column(
         DateTime,  # DATETIME
@@ -109,7 +118,7 @@ class Account(Base):
         onupdate=datetime.utcnow,
         nullable=False
     )
-    
+
     # I2.4: Отношения настроены корректно
     # account.sessions -> список сессий
     sessions: Mapped[List["Session"]] = relationship(
@@ -118,21 +127,115 @@ class Account(Base):
         cascade="all, delete-orphan",  # ON DELETE CASCADE
         lazy="dynamic"
     )
-    
+
     # account.connection_attempts -> список попыток подключения
     connection_attempts: Mapped[List["ConnectionAttempt"]] = relationship(
         "ConnectionAttempt",
         back_populates="account",
         lazy="dynamic"
     )
-    
+
     # I2.5: Ограничения БД сохраняются
+    # Composite unique constraint: пара (cn, serial_number) должна быть уникальной
     __table_args__ = (
-        UniqueConstraint("cn", name="uk_cn"),  # I1.1: UNIQUE KEY uk_cn (cn)
+        UniqueConstraint("cn", "serial_number", name="uk_cn_serial"),
     )
-    
+
     def __repr__(self) -> str:
-        return f"<Account(id={self.id}, cn='{self.cn}')>"
+        return f"<Account(id={self.id}, cn='{self.cn}', serial='{self.serial_number}')>"
+
+    @property
+    def is_active(self) -> bool:
+        """
+        Проверяет, активен ли данный сертификат.
+
+        Returns:
+            True если сертификат не отозван и не истек
+        """
+        if self.is_revoked:
+            return False
+        if self.valid_to and self.valid_to < datetime.utcnow():
+            return False
+        return True
+
+    @staticmethod
+    def can_user_connect(db, cn: str) -> bool:
+        """
+        Проверяет, может ли пользователь с данным CN подключаться.
+
+        Пользователь может подключаться если у него есть хотя бы один
+        неотозванный и неистекший сертификат.
+
+        Args:
+            db: сессия базы данных
+            cn: Common Name пользователя
+
+        Returns:
+            True если пользователь имеет активный сертификат
+        """
+        from sqlalchemy import or_
+        active_account = db.query(Account).filter(
+            Account.cn == cn,
+            Account.is_revoked == False,
+            or_(
+                Account.valid_to == None,
+                Account.valid_to >= datetime.utcnow()
+            )
+        ).first()
+        return active_account is not None
+
+    @staticmethod
+    def get_active_certificates_count(db, cn: str) -> int:
+        """
+        Возвращает количество активных сертификатов пользователя.
+
+        Args:
+            db: сессия базы данных
+            cn: Common Name пользователя
+
+        Returns:
+            Количество активных (неотозванных и неистекших) сертификатов
+        """
+        from sqlalchemy import or_
+        return db.query(Account).filter(
+            Account.cn == cn,
+            Account.is_revoked == False,
+            or_(
+                Account.valid_to == None,
+                Account.valid_to >= datetime.utcnow()
+            )
+        ).count()
+
+    @staticmethod
+    def get_certificates_stats(db, cn: str) -> dict:
+        """
+        Возвращает статистику по сертификатам пользователя.
+
+        Args:
+            db: сессия базы данных
+            cn: Common Name пользователя
+
+        Returns:
+            Словарь с полями:
+                - total: общее количество сертификатов
+                - active: количество активных сертификатов
+                - revoked: количество отозванных сертификатов
+                - expired: количество истекших сертификатов
+        """
+        from sqlalchemy import or_, and_
+        accounts = db.query(Account).filter(Account.cn == cn).all()
+
+        total = len(accounts)
+        revoked = sum(1 for a in accounts if a.is_revoked)
+        expired = sum(1 for a in accounts if not a.is_revoked and a.valid_to and a.valid_to < datetime.utcnow())
+        active = total - revoked - expired
+
+        return {
+            "total": total,
+            "active": active,
+            "revoked": revoked,
+            "expired": expired
+        }
 
 
 class Session(Base):

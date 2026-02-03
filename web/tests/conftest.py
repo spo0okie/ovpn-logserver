@@ -13,7 +13,6 @@ from sqlalchemy.orm import sessionmaker, Session
 
 # Настраиваем тестовую БД
 os.environ["DATABASE_URL"] = "sqlite:///./test_web.db"
-os.environ["API_USERS"] = "admin:admin,test:test123"
 
 from core.database import Base, get_db
 from core.models import Account, Session as SessionModel, ConnectionAttempt
@@ -75,7 +74,8 @@ def client(db):
 @pytest.fixture
 def auth_headers():
     """Фикстура для заголовков авторизации."""
-    credentials = base64.b64encode(b"admin:admin").decode("utf-8")
+    # Используем учетные данные из config/auth.yaml
+    credentials = base64.b64encode(b"admin:admin_password_123").decode("utf-8")
     return {"Authorization": f"Basic {credentials}"}
 
 

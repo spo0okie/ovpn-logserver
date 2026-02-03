@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""
+Wrapper для client-connect скрипта OpenVPN.
+Вызывается при подключении клиента.
+
+Установка:
+    mkdir -p /etc/openvpn/scripts
+    cp collector/openvpn_scripts/client-connect /etc/openvpn/scripts/
+    chmod +x /etc/openvpn/scripts/client-connect
+
+Настройка OpenVPN (/etc/openvpn/server.conf):
+    client-connect /etc/openvpn/scripts/client-connect
+    setenv-safe common_name
+    setenv-safe trusted_ip
+    setenv-safe ifconfig_pool_remote_ip
+"""
+import sys
+import os
+
+# Добавляем путь к проекту для импорта модулей
+# Предполагается, что проект установлен в /opt/openvpn-logserver
+# Если путь другой - измените его здесь
+PROJECT_PATH = os.environ.get('OPENVPN_LOGSERVER_PATH', '/opt/openvpn-logserver')
+sys.path.insert(0, PROJECT_PATH)
+
+try:
+    from collector.client_connect import main
+except ImportError as e:
+    print(f"Error: Cannot import collector.client_connect: {e}", file=sys.stderr)
+    print(f"Make sure PROJECT_PATH is correct: {PROJECT_PATH}", file=sys.stderr)
+    sys.exit(0)  # Не блокируем VPN при ошибке
+
+if __name__ == '__main__':
+    sys.exit(main())
