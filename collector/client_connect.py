@@ -5,10 +5,11 @@
 Обрабатывает событие подключения клиента:
 1. Читает переменные окружения от OpenVPN (I4.1)
 2. Создает или находит account по CN и serial_number (I4.2)
-3. Создает запись session со статусом 'active' (I4.3)
-4. Использует GeoIP модуль для определения геолокации (I4.4)
-5. При любой ошибке возвращает exit 0, не блокируя VPN (I4.5)
-6. Не делает SELECT запросов в БД для создания account (I4.6)
+3. Проверяет наличие orphaned сессий для данного CN (C5.1-C5.4)
+4. Создает запись session со статусом 'active' (I4.3)
+5. Использует GeoIP модуль для определения геолокации (I4.4)
+6. При любой ошибке возвращает exit 0, не блокируя VPN (I4.5)
+7. Не делает SELECT запросов в БД для создания account (I4.6)
 
 Инварианты:
 - I4.1: Только переменные окружения OpenVPN
@@ -17,6 +18,10 @@
 - I4.4: GeoIP через resolve_geoip()
 - I4.5: exit 0 при любой ошибке
 - I4.6: Только INSERT операции для account
+- C5.1: При подключении с активной сессией - старая помечается как orphaned
+- C5.2: Перед созданием сессии проверяется наличие активной
+- C5.3: orphaned сессия закрывается (disconnected_at=NOW())
+- C5.4: Новая сессия создается только после закрытия старой
 """
 
 import os
@@ -197,6 +202,78 @@ def create_or_get_account(db, cn: str, serial_number: str = "unknown"):
     return account
 
 
+def get_active_sessions_for_account(db, account_id: int) -> list:
+    """
+    Возвращает все активные сессии для данного аккаунта.
+
+    Invariant C5.2: Проверяет наличие активной сессии для данного CN
+
+    Аргументы:
+        db: сессия базы данных
+        account_id: ID аккаунта
+
+    Возвращает:
+        list: Список активных сессий
+    """
+    active_sessions = db.query(Session).filter(
+        Session.account_id == account_id,
+        Session.status == 'active'
+    ).all()
+
+    return active_sessions
+
+
+def close_orphaned_session(db, session: Session):
+    """
+    Закрывает orphaned сессию: устанавливает status='error' и disconnected_at=NOW().
+
+    Invariant C5.1: При подключении с активной сессией - старая помечается как orphaned
+    Invariant C5.3: orphaned сессия закрывается (disconnected_at=NOW())
+
+    Аргументы:
+        db: сессия базы данных
+        session: Сессия для закрытия
+    """
+    session.status = 'error'
+    session.disconnected_at = datetime.utcnow()
+    db.commit()
+
+    logger.info(
+        f"Orphaned session closed: session_id={session.id}, "
+        f"account_id={session.account_id}, "
+        f"connected_at={session.connected_at}, "
+        f"disconnected_at={session.disconnected_at}"
+    )
+
+
+def close_orphaned_sessions(db, account_id: int) -> int:
+    """
+    Находит и закрывает все orphaned сессии для аккаунта.
+
+    Invariant C5.4: Создается новая сессия только после закрытия старой
+
+    Аргументы:
+        db: сессия базы данных
+        account_id: ID аккаунта
+
+    Возвращает:
+        int: Количество закрытых orphaned сессий
+    """
+    active_sessions = get_active_sessions_for_account(db, account_id)
+
+    if not active_sessions:
+        logger.debug(f"No active sessions found for account {account_id}")
+        return 0
+
+    closed_count = 0
+    for session in active_sessions:
+        close_orphaned_session(db, session)
+        closed_count += 1
+
+    logger.info(f"Closed {closed_count} orphaned sessions for account {account_id}")
+    return closed_count
+
+
 def create_session(db, account_id: int, env_vars: dict, geo: dict):
     """
     Создает запись о сессии со статусом 'active'.
@@ -246,6 +323,8 @@ def client_connect(db_session=None):
     Обрабатывает подключение клиента и записывает данные в БД.
     При любой ошибке возвращает 0, чтобы не блокировать VPN.
 
+    Invariant C5.1-C5.4: Проверяет и закрывает orphaned сессии перед созданием новой
+
     Args:
         db_session: Опциональная сессия БД для тестирования.
                    Если не передана, создается новая сессия через SessionLocal.
@@ -253,7 +332,7 @@ def client_connect(db_session=None):
     Returns:
         int: код выхода (всегда 0)
 
-    Invariants: I4.1, I4.2, I4.3, I4.4, I4.5, I4.6
+    Invariants: I4.1, I4.2, I4.3, I4.4, I4.5, I4.6, C5.1, C5.2, C5.3, C5.4
     """
     logger.info("=" * 60)
     logger.info("Starting client-connect script")
@@ -283,6 +362,11 @@ def client_connect(db_session=None):
             env_vars['common_name'],
             env_vars.get('serial_number', 'unknown')
         )
+
+        # C5.1-C5.4: Проверяем и закрываем orphaned сессии перед созданием новой
+        closed_count = close_orphaned_sessions(db, account.id)
+        if closed_count > 0:
+            logger.info(f"Found and closed {closed_count} orphaned sessions for CN='{env_vars['common_name']}'")
 
         # I4.4: Получаем геолокацию
         logger.debug(f"Resolving GeoIP for {env_vars['trusted_ip']}")
