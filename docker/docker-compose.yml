@@ -60,6 +60,7 @@ services:
       - openvpn_pki:/etc/openvpn/pki
       - openvpn_ccd:/etc/openvpn/ccd
       - openvpn_certs:/etc/openvpn/certs
+      - openvpn_mgmt:/run/openvpn  # O4.4: Монтирование для Management Interface socket
     networks:
       - openvpn-network
     environment:
@@ -132,6 +133,8 @@ volumes:
   openvpn_ccd:
     driver: local
   openvpn_certs:
+    driver: local
+  openvpn_mgmt:
     driver: local
 
 networks:

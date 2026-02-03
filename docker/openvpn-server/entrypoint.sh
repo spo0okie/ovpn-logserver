@@ -15,6 +15,7 @@ PKI_DIR="/etc/openvpn/pki"
 EASYRSA_DIR="/usr/share/easy-rsa"
 CERTS_DIR="/etc/openvpn/certs"
 CCD_DIR="/etc/openvpn/ccd"
+MGMT_SOCKET_DIR="/run/openvpn"  # O4.3: Директория для Management Interface socket
 
 # Настройки сертификатов (можно переопределить через env)
 KEY_COUNTRY="${KEY_COUNTRY:-RU}"
@@ -140,7 +141,10 @@ main() {
     log "Starting OpenVPN Server setup..."
     
     # Создаем необходимые директории
-    mkdir -p "$CERTS_DIR" "$CCD_DIR"
+    mkdir -p "$CERTS_DIR" "$CCD_DIR" "$MGMT_SOCKET_DIR"
+    
+    # O4.3: Устанавливаем права на директорию сокета
+    chmod 755 "$MGMT_SOCKET_DIR"
     
     # Проверяем, существует ли уже PKI
     if [ ! -f "$PKI_DIR/ca.crt" ]; then
