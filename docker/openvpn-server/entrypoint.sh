@@ -3,19 +3,27 @@
 # Entrypoint скрипт для OpenVPN сервера
 # =============================================================================
 # Генерирует PKI при первом запуске и запускает OpenVPN сервер
-# 
+#
+# Исправления:
+# - Убраны конфликтующие --dev tun0 и --server параметры (они переопределяли server.conf)
+# - Добавлена проверка и создание /dev/net/tun если не существует
+# - Улучшен error handling
+# - Используется ECDH вместо DH для быстрой генерации
+#
 # Инварианты:
 # - I9.2: OpenVPN сервер генерирует PKI при первом запуске
 # =============================================================================
 
-set -e
+# Не используем set -e глобально, чтобы скрипт мог обрабатывать ошибки graceful
+# set -e
 
 # Настройки PKI
 PKI_DIR="/etc/openvpn/pki"
 EASYRSA_DIR="/usr/share/easy-rsa"
 CERTS_DIR="/etc/openvpn/certs"
 CCD_DIR="/etc/openvpn/ccd"
-MGMT_SOCKET_DIR="/run/openvpn"  # O4.3: Директория для Management Interface socket
+MGMT_SOCKET_DIR="/run/openvpn"
+MGMT_SOCKET_PATH="$MGMT_SOCKET_DIR/mgmt.sock"
 
 # Настройки сертификатов (можно переопределить через env)
 KEY_COUNTRY="${KEY_COUNTRY:-RU}"
@@ -36,13 +44,17 @@ generate_pki() {
     log "Generating PKI infrastructure..."
     
     # Инициализируем PKI
-    cd "$EASYRSA_DIR"
+    cd "$EASYRSA_DIR" || { log "ERROR: Cannot cd to $EASYRSA_DIR"; return 1; }
     
     # Создаем директории если их нет
-    mkdir -p "$PKI_DIR"
+    mkdir -p "$PKI_DIR" || { log "ERROR: Cannot create $PKI_DIR"; return 1; }
     
-    # Инициализируем PKI
-    ./easyrsa init-pki
+    # Инициализируем PKI в неинтерактивном режиме
+    export EASYRSA_BATCH=1
+    export EASYRSA_SKIP_CONFIRM=1
+    
+    log "Initializing PKI..."
+    ./easyrsa init-pki || { log "ERROR: Failed to init PKI"; return 1; }
     
     # Создаем CA
     log "Creating Certificate Authority..."
@@ -58,45 +70,53 @@ set_var EASYRSA_ALGO           "ec"
 set_var EASYRSA_DIGEST         "sha512"
 EOF
     
-    ./easyrsa --batch --vars=/tmp/vars build-ca nopass
+    ./easyrsa --batch --vars=/tmp/vars build-ca nopass || { log "ERROR: Failed to build CA"; return 1; }
     
     # Создаем сертификат сервера
     log "Creating server certificate..."
-    ./easyrsa --batch build-server-full server nopass
+    ./easyrsa --batch build-server-full server nopass || { log "ERROR: Failed to build server cert"; return 1; }
     
     # Создаем сертификат клиента (для тестирования)
     log "Creating client certificate..."
-    ./easyrsa --batch build-client-full test-client nopass
-    
-    # Генерируем DH параметры (для TLS)
-    log "Generating DH parameters (this may take a while)..."
-    ./easyrsa gen-dh
+    ./easyrsa --batch build-client-full test-client nopass || { log "ERROR: Failed to build client cert"; return 1; }
     
     # Генерируем CRL
     log "Generating CRL..."
-    ./easyrsa gen-crl
+    ./easyrsa gen-crl || { log "WARNING: Failed to generate CRL, continuing..."; }
+    
+    # Вместо DH параметров используем ECDH для ускорения генерации
+    # ECDH с prime256v1 генерируется мгновенно (вместо >2 минут для DH 2048-bit)
+    log "Generating ECDH parameters (quick)..."
+    openssl ecparam -name prime256v1 -genkey -noout -out /etc/openvpn/ecdh.key 2>/dev/null || true
+    openssl ecparam -name prime256v1 -out /etc/openvpn/ecdh.pem 2>/dev/null || true
     
     # Копируем файлы в нужные места
-    cp "$PKI_DIR/ca.crt" /etc/openvpn/
-    cp "$PKI_DIR/issued/server.crt" /etc/openvpn/
-    cp "$PKI_DIR/private/server.key" /etc/openvpn/
-    cp "$PKI_DIR/dh.pem" /etc/openvpn/
-    cp "$PKI_DIR/crl.pem" /etc/openvpn/
+    log "Copying certificates to OpenVPN directory..."
+    cp "$EASYRSA_DIR/pki/ca.crt" /etc/openvpn/ || { log "ERROR: Failed to copy ca.crt"; return 1; }
+    cp "$EASYRSA_DIR/pki/issued/server.crt" /etc/openvpn/ || { log "ERROR: Failed to copy server.crt"; return 1; }
+    cp "$EASYRSA_DIR/pki/private/server.key" /etc/openvpn/ || { log "ERROR: Failed to copy server.key"; return 1; }
+    
+    # Копируем CRL если существует
+    if [ -f "$EASYRSA_DIR/pki/crl.pem" ]; then
+        cp "$EASYRSA_DIR/pki/crl.pem" /etc/openvpn/ || { log "WARNING: Failed to copy crl.pem"; }
+    fi
     
     # Копируем клиентские сертификаты в общую директорию
-    cp "$PKI_DIR/ca.crt" "$CERTS_DIR/"
-    cp "$PKI_DIR/issued/test-client.crt" "$CERTS_DIR/"
-    cp "$PKI_DIR/private/test-client.key" "$CERTS_DIR/"
+    cp "$EASYRSA_DIR/pki/ca.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client ca.crt"; }
+    cp "$EASYRSA_DIR/pki/issued/test-client.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client cert"; }
+    cp "$EASYRSA_DIR/pki/private/test-client.key" "$CERTS_DIR/" || { log "WARNING: Failed to copy client key"; }
     
     # Создаем ta.key для tls-auth
-    openvpn --genkey secret /etc/openvpn/ta.key
-    cp /etc/openvpn/ta.key "$CERTS_DIR/"
+    log "Generating ta.key for TLS auth..."
+    openvpn --genkey secret /etc/openvpn/ta.key || { log "ERROR: Failed to generate ta.key"; return 1; }
+    cp /etc/openvpn/ta.key "$CERTS_DIR/" || { log "WARNING: Failed to copy ta.key to CERTS_DIR"; }
     
     # Устанавливаем права
-    chmod 755 "$CERTS_DIR"
-    chmod 644 "$CERTS_DIR"/*
+    chmod 755 "$CERTS_DIR" 2>/dev/null || true
+    chmod 644 "$CERTS_DIR"/* 2>/dev/null || true
     
     log "PKI generation completed!"
+    return 0
 }
 
 # Функция ожидания MySQL
@@ -111,18 +131,28 @@ wait_for_mysql() {
     DB_HOST=$(echo "$DB_URL" | sed -n 's/.*@\([^:]*\):.*/\1/p')
     DB_HOST="${DB_HOST:-mysql}"
     
-    # Ждем пока MySQL станет доступен
-    until nc -z "$DB_HOST" 3306 2>/dev/null; do
-        log "MySQL is not ready yet, waiting..."
+    # Ждем пока MySQL станет доступен (используем nc)
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if nc -z "$DB_HOST" 3306 2>/dev/null; then
+            log "MySQL is ready!"
+            return 0
+        fi
+        log "MySQL is not ready yet (attempt $attempt/$max_attempts), waiting..."
         sleep 2
+        attempt=$((attempt + 1))
     done
     
-    log "MySQL is ready!"
+    log "WARNING: MySQL did not become ready in time, continuing anyway..."
+    return 0  # Не блокируем запуск, пусть healthcheck решит
 }
 
 # Функция создания CCD файла для клиента
 create_ccd_file() {
     log "Creating CCD file for test-client..."
+    
+    mkdir -p "$CCD_DIR"
     
     cat > "$CCD_DIR/test-client" << 'EOF'
 # Client Config Directory file for test-client
@@ -134,6 +164,54 @@ push "route 192.168.100.0 255.255.255.0"
 EOF
     
     chmod 644 "$CCD_DIR/test-client"
+    log "CCD file created"
+}
+
+# Функция проверки/создания TUN устройства
+setup_tun_device() {
+    log "Setting up TUN device..."
+    
+    # Проверяем существует ли /dev/net/tun
+    if [ ! -c /dev/net/tun ]; then
+        log "Creating /dev/net/tun device..."
+        # Создаем директорию если не существует
+        mkdir -p /dev/net
+        # Создаем символическую ссылку или устройство
+        if [ -e /dev/net/tun ]; then
+            log "/dev/net/tun exists but is not a device"
+        else
+            # Пытаемся создать устройство через mknod (может не работать в контейнере без privileges)
+            mknod /dev/net/tun c 10 200 2>/dev/null || {
+                log "Cannot create /dev/net/tun (may need privileged mode)"
+            }
+        fi
+    else
+        log "/dev/net/tun device is ready"
+    fi
+    
+    # Проверяем доступность
+    if [ -c /dev/net/tun ]; then
+        chmod 666 /dev/net/tun 2>/dev/null || true
+        return 0
+    else
+        log "WARNING: /dev/net/tun is not available"
+        return 1
+    fi
+}
+
+# Функция настройки iptables
+setup_iptables() {
+    log "Setting up iptables rules..."
+    
+    # Включаем forwarding
+    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+    
+    # Добавляем NAT правило для VPN сети
+    # Используем || true чтобы не блокировать при ошибках
+    iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null || true
+    
+    log "iptables rules configured"
 }
 
 # Основная логика
@@ -141,38 +219,56 @@ main() {
     log "Starting OpenVPN Server setup..."
     
     # Создаем необходимые директории
-    mkdir -p "$CERTS_DIR" "$CCD_DIR" "$MGMT_SOCKET_DIR"
+    mkdir -p "$CERTS_DIR" "$CCD_DIR" "$MGMT_SOCKET_DIR" || {
+        log "ERROR: Cannot create required directories"
+        exit 1
+    }
     
-    # O4.3: Устанавливаем права на директорию сокета
+    # Устанавливаем права на директорию сокета
     chmod 755 "$MGMT_SOCKET_DIR"
+    
+    # Проверяем/создаем TUN устройство
+    setup_tun_device || {
+        log "WARNING: TUN device setup failed, continuing..."
+    }
     
     # Проверяем, существует ли уже PKI
     if [ ! -f "$PKI_DIR/ca.crt" ]; then
         log "PKI not found, generating new PKI..."
-        generate_pki
+        generate_pki || {
+            log "ERROR: PKI generation failed"
+            exit 1
+        }
         create_ccd_file
     else
         log "PKI already exists, skipping generation..."
+        # Убеждаемся что CCD файл существует
+        if [ ! -f "$CCD_DIR/test-client" ]; then
+            create_ccd_file
+        fi
     fi
     
     # Ждем MySQL
     wait_for_mysql
     
-    # Настраиваем iptables для NAT
-    log "Setting up iptables rules..."
-    iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE 2>/dev/null || true
+    # Настраиваем iptables
+    setup_iptables
     
-    # Создаем директорию для статуса
-    mkdir -p /var/log/openvpn
-    touch /var/log/openvpn/openvpn-status.log
+    # Создаем директорию для логов
+    mkdir -p /var/log/openvpn /var/log/openvpn-logserver
+    touch /var/log/openvpn/openvpn.log /var/log/openvpn/openvpn-status.log
     
     log "Starting OpenVPN server..."
     
-    # Запускаем OpenVPN
+    # ЗАПУСК OpenVPN
+    # ВАЖНО: Не используем --dev tun0 и --server - они конфликтуют с server.conf
+    # server.conf уже содержит все необходимые настройки:
+    # - dev tun
+    # - server 10.8.0.0 255.255.255.0
+    # - management unix-socket /run/openvpn/mgmt.sock
+    
     exec openvpn --config /etc/openvpn/server.conf \
-        --cd /etc/openvpn \
-        --dev tun0 \
-        --server 10.8.0.0 255.255.255.0
+        --cd /etc/openvpn
 }
 
 # Запускаем основную логику

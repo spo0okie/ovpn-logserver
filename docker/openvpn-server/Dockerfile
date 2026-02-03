@@ -11,6 +11,15 @@
 FROM alpine:3.19
 
 # Устанавливаем необходимые пакеты
+# - openvpn: VPN сервер
+# - easy-rsa: Утилиты для PKI
+# - bash: Для entrypoint скрипта
+# - curl: Для healthcheck и тестов
+# - python3: Для collector скриптов
+# - py3-pip, py3-pip: Python пакеты
+# - ip6tables, iptables: Для настройки NAT
+# - netcat-openbsd: Для проверки доступности MySQL (wait_for_mysql)
+# - openssl: Для генерации ECDH параметров
 RUN apk add --no-cache \
     openvpn \
     easy-rsa \
@@ -22,6 +31,8 @@ RUN apk add --no-cache \
     py3-pymysql \
     ip6tables \
     iptables \
+    netcat-openbsd \
+    openssl \
     && ln -sf python3 /usr/bin/python
 
 # Устанавливаем дополнительные Python пакеты
@@ -38,6 +49,7 @@ RUN mkdir -p \
     /etc/openvpn/ccd \
     /etc/openvpn/certs \
     /var/log/openvpn \
+    /var/log/openvpn-logserver \
     /app/collector \
     /app/core
 
@@ -54,6 +66,10 @@ COPY docker/openvpn-server/server.conf /etc/openvpn/server.conf
 # Копируем entrypoint скрипт
 COPY docker/openvpn-server/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Создаем пользователя nobody для OpenVPN (требуется в server.conf)
+RUN adduser -D -H -s /sbin/nologin -u 65534 -G nobody nobody 2>/dev/null || \
+    adduser -D -H -s /sbin/nologin nobody 2>/dev/null || true
 
 # Открываем порт OpenVPN
 EXPOSE 1194/udp

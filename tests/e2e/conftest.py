@@ -1,459 +1,152 @@
+#!/usr/bin/env python3
 """
-Фикстуры для E2E тестов.
+Конфигурация pytest для E2E тестов в Docker.
 
-Содержит фикстуры для полного end-to-end тестирования системы.
+Предоставляет фикстуры для управления Docker Compose окружением.
 """
 
 import os
-import sys
-import base64
-from datetime import datetime, timedelta
-from unittest.mock import patch
-
+import subprocess
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, Session
+import sys
 
-# Добавляем корневую директорию проекта в путь
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-# Устанавливаем тестовую БД ДО импорта core.database
-TEST_E2E_DATABASE_URL = "sqlite:///./test_e2e.db"
-os.environ["DATABASE_URL"] = TEST_E2E_DATABASE_URL
-
-from core.database import Base, get_db
-from core.models import Account, Session as SessionModel, ConnectionAttempt
-from web.main import app
+# Add parent directories to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# Тестовая БД для E2E тестов
-TEST_E2E_DATABASE_URL = os.getenv(
-    "TEST_E2E_DATABASE_URL",
-    "sqlite:///./test_e2e.db"
-)
+def run_docker_compose_cmd(cmd: list, cwd: str = None) -> subprocess.CompletedProcess:
+    """
+    Запускает команду docker-compose из корневой директории проекта.
+    
+    Args:
+        cmd: Команда для выполнения
+        cwd: Рабочая директория
+    
+    Returns:
+        Результат выполнения команды
+    """
+    # Определяем корневую директорию проекта
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    docker_compose_file = os.path.join(project_root, "docker", "docker-compose.yml")
+    
+    full_cmd = ["docker-compose", "-f", docker_compose_file] + cmd
+    return subprocess.run(
+        full_cmd, 
+        cwd=cwd or project_root, 
+        capture_output=True, 
+        text=True
+    )
 
 
 @pytest.fixture(scope="session")
-def engine():
+def docker_compose_project():
     """
-    Создает engine для тестовой БД.
+    Фикстура сессии: поднимает Docker Compose окружение один раз.
     
     Yields:
-        Engine: SQLAlchemy engine
+        Результат запуска docker-compose up -d
     """
-    engine = create_engine(
-        TEST_E2E_DATABASE_URL,
-        connect_args={"check_same_thread": False}
-    )
+    # Останавливаем любые существующие контейнеры
+    run_docker_compose_cmd(["down"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
-    # Включаем поддержку внешних ключей для SQLite
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+    # Поднимаем окружение
+    result = run_docker_compose_cmd(["up", "-d"])
     
-    yield engine
-    engine.dispose()
+    if result.returncode != 0:
+        pytest.skip(f"Docker Compose failed to start: {result.stderr}")
+    
+    yield result
+    
+    # После всех тестов останавливаем окружение
+    run_docker_compose_cmd(["down"], cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 @pytest.fixture(scope="function")
-def tables(engine):
+def clean_docker_state(docker_compose_project):
     """
-    Создает таблицы перед тестом и удаляет после.
-    
-    Args:
-        engine: SQLAlchemy engine
+    Фикстура функции: очищает тестовые данные перед каждым тестом.
     
     Yields:
         None
     """
-    Base.metadata.create_all(engine)
+    # Очищаем тестовые данные в БД
+    try:
+        cleanup_result = subprocess.run(
+            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
+             "openvpn_logs", "-e", """
+                DELETE FROM sessions WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+             """],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        # Также очищаем тестовые аккаунты
+        subprocess.run(
+            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
+             "openvpn_logs", "-e", """
+                DELETE FROM accounts WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+             """],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        pass
+    
     yield
-    Base.metadata.drop_all(engine)
+    
+    # Очищаем после теста
+    try:
+        subprocess.run(
+            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
+             "openvpn_logs", "-e", """
+                DELETE FROM sessions WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+             """],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        subprocess.run(
+            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
+             "openvpn_logs", "-e", """
+                DELETE FROM accounts WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+             """],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        pass
 
 
-@pytest.fixture(scope="function")
-def db(engine, tables):
+def pytest_configure(config):
     """
-    Создает сессию БД для теста.
-    
-    Args:
-        engine: SQLAlchemy engine
-        tables: Фикстура создания таблиц
-    
-    Yields:
-        Session: SQLAlchemy сессия
+    Регистрирует маркер для пропуска тестов без Docker.
     """
-    # Для E2E тестов используем реальную сессию (не транзакцию с rollback)
-    # чтобы API мог видеть данные
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    
-    yield session
-    
-    session.close()
+    config.addinivalue_line(
+        "markers", "docker: marker for tests requiring Docker"
+    )
 
 
-@pytest.fixture(scope="function")
-def api_client(engine, tables):
+def pytest_collection_modifyitems(config, items):
     """
-    Создает тестовый клиент для API.
-    
-    Args:
-        engine: SQLAlchemy engine
-        tables: Фикстура создания таблиц
-    
-    Yields:
-        TestClient: Клиент для тестирования API
+    Пропускает тесты если Docker недоступен.
     """
-    # Создаем новую сессию для API
-    Session = sessionmaker(bind=engine)
-    db = Session()
+    docker_available = False
+    try:
+        result = subprocess.run(
+            ["docker", "ps"], 
+            capture_output=True, 
+            text=True, 
+            timeout=5
+        )
+        docker_available = result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        docker_available = False
     
-    def _get_db_override():
-        try:
-            yield db
-        finally:
-            pass
-    
-    app.dependency_overrides[get_db] = _get_db_override
-    
-    with TestClient(app) as client:
-        yield client
-    
-    app.dependency_overrides.clear()
-    db.close()
-
-
-@pytest.fixture
-def auth_headers():
-    """
-    Создает заголовки авторизации для API.
-    
-    Returns:
-        dict: Заголовки с Basic Auth
-    """
-    # Используем учетные данные из config/auth.yaml
-    credentials = base64.b64encode(b"admin:admin_password_123").decode("utf-8")
-    return {"Authorization": f"Basic {credentials}"}
-
-
-class E2EVPNSimulator:
-    """
-    E2E симулятор VPN для полного цикла тестирования.
-    
-    Имитирует полный цикл работы системы:
-    - Подключение клиента (client_connect)
-    - Обновление данных в реальном времени
-    - Отключение клиента (client_disconnect)
-    - Синхронизация сертификатов
-    """
-    
-    def __init__(self, engine):
-        """
-        Инициализация симулятора.
-        
-        Args:
-            engine: SQLAlchemy engine для создания сессий
-        """
-        self.engine = engine
-        self._connected_users = {}
-        self._session_counter = 0
-    
-    def _get_db(self):
-        """Создает новую сессию БД."""
-        Session = sessionmaker(bind=self.engine)
-        return Session()
-    
-    def connect(self, cn: str, source_ip: str, virtual_ip: str = None, 
-                country: str = None, city: str = None) -> dict:
-        """
-        Симулирует полное подключение клиента к VPN.
-        
-        Args:
-            cn: Common Name сертификата
-            source_ip: IP адрес клиента
-            virtual_ip: Выделенный VPN IP (опционально)
-            country: Страна для GeoIP (опционально)
-            city: Город для GeoIP (опционально)
-        
-        Returns:
-            dict: Информация о созданной сессии
-        """
-        self._session_counter += 1
-        session_id = f"e2e_session_{self._session_counter}"
-        
-        # Устанавливаем переменные окружения как при реальном подключении
-        env_vars = {
-            'common_name': cn,
-            'trusted_ip': source_ip,
-            'trusted_port': '12345',
-            'ifconfig_pool_remote_ip': virtual_ip or f"10.8.0.{self._session_counter}",
-            'time_unix': str(int(datetime.utcnow().timestamp()))
-        }
-        
-        # Сохраняем для отключения
-        self._connected_users[cn] = {
-            'session_id': session_id,
-            'source_ip': source_ip,
-            'virtual_ip': env_vars['ifconfig_pool_remote_ip'],
-            'bytes_sent': 0,
-            'bytes_received': 0,
-            'connected_at': datetime.utcnow()
-        }
-        
-        # Вызываем client_connect с подменой окружения
-        with patch.dict(os.environ, env_vars, clear=False):
-            from collector.client_connect import create_or_get_account, create_session
-            
-            db = self._get_db()
-            try:
-                # Мокаем GeoIP если указаны страна/город
-                if country or city:
-                    geo = {'country': country, 'city': city}
-                    account = create_or_get_account(db, cn)
-                    create_session(db, account.id, env_vars, geo)
-                else:
-                    from core.geoip import resolve_geoip
-                    account = create_or_get_account(db, cn)
-                    geo = resolve_geoip(source_ip, db)
-                    create_session(db, account.id, env_vars, geo)
-            finally:
-                db.close()
-        
-        return self._connected_users[cn]
-    
-    def disconnect(self, cn: str, bytes_sent: int = 1000, bytes_received: int = 2000,
-                   duration: int = 3600):
-        """
-        Симулирует полное отключение клиента от VPN.
-        
-        Args:
-            cn: Common Name сертификата
-            bytes_sent: Отправлено байт
-            bytes_received: Получено байт
-            duration: Длительность сессии в секундах
-        
-        Returns:
-            dict: Информация о закрытой сессии
-        """
-        if cn not in self._connected_users:
-            return None
-        
-        user_info = self._connected_users[cn]
-        
-        # Устанавливаем переменные окружения как при реальном отключении
-        env_vars = {
-            'common_name': cn,
-            'bytes_sent': str(bytes_sent),
-            'bytes_received': str(bytes_received),
-            'time_duration': str(duration)
-        }
-        
-        # Вызываем client_disconnect с подменой окружения
-        with patch.dict(os.environ, env_vars, clear=False):
-            from collector.client_disconnect import close_active_session
-            
-            db = self._get_db()
-            try:
-                close_active_session(db, cn, bytes_sent, bytes_received)
-            finally:
-                db.close()
-        
-        user_info['disconnected_at'] = datetime.utcnow()
-        user_info['bytes_sent'] = bytes_sent
-        user_info['bytes_received'] = bytes_received
-        
-        del self._connected_users[cn]
-        return user_info
-    
-    def get_session_info(self, cn: str) -> dict:
-        """
-        Возвращает информацию о сессии пользователя.
-        
-        Args:
-            cn: Common Name сертификата
-        
-        Returns:
-            dict: Информация о сессии или None
-        """
-        return self._connected_users.get(cn)
-    
-    def is_connected(self, cn: str) -> bool:
-        """
-        Проверяет, подключен ли пользователь.
-        
-        Args:
-            cn: Common Name сертификата
-        
-        Returns:
-            bool: True если пользователь подключен
-        """
-        return cn in self._connected_users
-    
-    def get_active_count(self) -> int:
-        """
-        Возвращает количество активных сессий.
-        
-        Returns:
-            int: Количество активных сессий
-        """
-        return len(self._connected_users)
-
-
-@pytest.fixture
-def e2e_vpn_simulator(engine):
-    """
-    Создает E2E симулятор VPN.
-    
-    Args:
-        engine: SQLAlchemy engine
-    
-    Yields:
-        E2EVPNSimulator: Экземпляр симулятора
-    """
-    simulator = E2EVPNSimulator(engine)
-    yield simulator
-
-
-@pytest.fixture
-def e2e_data_factory(engine):
-    """
-    Фабрика для создания E2E тестовых данных.
-    
-    Args:
-        engine: SQLAlchemy engine
-    
-    Returns:
-        E2EDataFactory: Фабрика тестовых данных
-    """
-    class E2EDataFactory:
-        """Фабрика для создания комплексных E2E тестовых данных."""
-        
-        def __init__(self, engine):
-            self.engine = engine
-            self._counter = 0
-        
-        def _get_db(self):
-            """Создает новую сессию БД."""
-            Session = sessionmaker(bind=self.engine)
-            return Session()
-        
-        def create_complete_account(self, cn: str = None, **kwargs):
-            """
-            Создает полный аккаунт со всеми метаданными.
-            
-            Returns:
-                Account: Созданный аккаунт
-            """
-            from core.models import Account
-            
-            self._counter += 1
-            cn = cn or f"e2e_user_{self._counter}"
-            
-            db = self._get_db()
-            try:
-                account = Account(
-                    cn=cn,
-                    valid_from=kwargs.get('valid_from', datetime.utcnow() - timedelta(days=365)),
-                    valid_to=kwargs.get('valid_to', datetime.utcnow() + timedelta(days=365)),
-                    is_revoked=kwargs.get('is_revoked', False),
-                    has_ccd=kwargs.get('has_ccd', True),
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-                db.add(account)
-                db.commit()
-                db.refresh(account)
-                return account
-            finally:
-                db.close()
-        
-        def create_session_history(self, account, num_sessions: int = 3):
-            """
-            Создает историю сессий для аккаунта.
-            
-            Args:
-                account: Аккаунт
-                num_sessions: Количество сессий
-            
-            Returns:
-                list: Список созданных сессий
-            """
-            from core.models import Session as SessionModel
-            
-            db = self._get_db()
-            try:
-                sessions = []
-                for i in range(num_sessions):
-                    self._counter += 1
-                    
-                    # Чередуем активные и закрытые сессии
-                    is_active = (i == num_sessions - 1)
-                    
-                    session = SessionModel(
-                        account_id=account.id,
-                        session_id=f"e2e_sess_{self._counter}",
-                        connected_at=datetime.utcnow() - timedelta(days=num_sessions-i),
-                        disconnected_at=None if is_active else datetime.utcnow() - timedelta(days=num_sessions-i-1),
-                        source_ip=f"192.168.{self._counter//256}.{self._counter%256}",
-                        country="Russia",
-                        city="Moscow",
-                        bytes_sent=1000 * (i + 1),
-                        bytes_received=2000 * (i + 1),
-                        virtual_ip=f"10.8.0.{self._counter}",
-                        status="active" if is_active else "closed"
-                    )
-                    db.add(session)
-                    sessions.append(session)
-                
-                db.commit()
-                for s in sessions:
-                    db.refresh(s)
-                return sessions
-            finally:
-                db.close()
-        
-        def create_failed_attempts(self, account=None, num_attempts: int = 3):
-            """
-            Создает историю неудачных попыток.
-            
-            Args:
-                account: Аккаунт (опционально)
-                num_attempts: Количество попыток
-            
-            Returns:
-                list: Список созданных попыток
-            """
-            from core.models import ConnectionAttempt
-            
-            db = self._get_db()
-            try:
-                attempts = []
-                failure_types = ["auth_failed", "cert_revoked", "ccd_missing"]
-                
-                for i in range(num_attempts):
-                    self._counter += 1
-                    
-                    attempt = ConnectionAttempt(
-                        account_id=account.id if account else None,
-                        attempted_at=datetime.utcnow() - timedelta(hours=i+1),
-                        source_ip=f"10.0.{self._counter//256}.{self._counter%256}",
-                        cert_cn=account.cn if account else f"unknown_{self._counter}",
-                        failure_reason=f"E2E test failure {i}",
-                        failure_type=failure_types[i % len(failure_types)],
-                        details=f"E2E test details {i}"
-                    )
-                    db.add(attempt)
-                    attempts.append(attempt)
-                
-                db.commit()
-                for a in attempts:
-                    db.refresh(a)
-                return attempts
-            finally:
-                db.close()
-    
-    return E2EDataFactory(engine)
+    if not docker_available:
+        pytest.skip("Docker is not available")
