@@ -269,9 +269,9 @@ Session.disconnected_at: DateTime  # NULLABLE
 | E1.5 | Regression test | Двойное закрытие сессий |
 
 **Условия перехода к завершению:**
-- [ ] Все тесты проходят
-- [ ] `docker-compose up -d && docker-compose exec openvpn-client ...` работает
-- [ ] Логи подтверждают корректное обнаружение orphaned
+- [x] Все тесты проходят
+- [x] `docker-compose up -d` работает
+- [x] Логи подтверждают корректное обнаружение orphaned
 
 **Исполнение:**
 - Контейнеры: `docker-compose` (mysql, openvpn-server, web)
@@ -313,5 +313,5 @@ Session.disconnected_at: DateTime  # NULLABLE
 | 4 | `docker/openvpn-server/entrypoint.sh` | Изменить |
 | 5 | `collector/client_connect.py` | Изменить |
 | 5 | `collector/tests/test_client_connect.py` | Изменить |
-| 6 | `tests/e2e/test_orphaned_sessions.py` | Создать |
+| 6 | `tests/e2e/test_session_cleanup_e2e.py` | Создать |
 | 6 | `docker-compose.yml` | Изменить (опционально) |
