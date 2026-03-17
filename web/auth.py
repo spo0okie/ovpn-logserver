@@ -11,6 +11,8 @@
 import logging
 import secrets
 import uuid
+import os
+import json
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
@@ -25,14 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# In-Memory Session Storage
+# File-based Session Storage
 # =============================================================================
-# Хранилище сессий: session_id -> {'username': str, 'created_at': datetime, 'last_used': datetime}
-# В продакшене рекомендуется использовать Redis
-_session_store: Dict[str, dict] = {}
-
-# Время жизни сессии в секундах (1 час по умолчанию)
+# Хранилище сессий в файлах: sessions/{session_id}.json
+# Каждый файл содержит: {'username': str, 'created_at': iso_string, 'last_used': iso_string}
+SESSION_DIR = os.path.join(os.path.dirname(__file__), "..", "sessions")
 SESSION_LIFETIME_SECONDS = 3600
+
+# Убедимся, что директория для сессий существует
+os.makedirs(SESSION_DIR, exist_ok=True)
 
 
 def create_session(username: str) -> str:
@@ -48,14 +51,18 @@ def create_session(username: str) -> str:
     session_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     
-    _session_store[session_id] = {
+    session_data = {
         'username': username,
-        'created_at': now,
-        'last_used': now
+        'created_at': now.isoformat(),
+        'last_used': now.isoformat()
     }
     
+    # Сохраняем сессию в файл
+    session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
+    with open(session_file, 'w') as f:
+        json.dump(session_data, f)
+    
     logger.debug(f"[AUTH] Создана новая сессия: session_id={session_id}, username={username}")
-    logger.debug(f"[AUTH] Всего активных сессий: {len(_session_store)}")
     
     return session_id
 
@@ -74,25 +81,55 @@ def validate_session(session_id: str) -> Optional[str]:
         logger.debug(f"[AUTH] validate_session: session_id пуст")
         return None
     
-    session_data = _session_store.get(session_id)
-    if not session_data:
-        logger.debug(f"[AUTH] validate_session: session_id={session_id} не найден в хранилище. Всего сессий: {len(_session_store)}")
+    # Читаем сессию из файла
+    session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
+    if not os.path.exists(session_file):
+        logger.debug(f"[AUTH] validate_session: session_id={session_id} не найден в файловом хранилище")
+        return None
+    
+    try:
+        with open(session_file, 'r') as f:
+            session_data = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"[AUTH] validate_session: ошибка чтения сессии {session_id}: {e}")
+        # Удаляем поврежденный файл
+        try:
+            os.remove(session_file)
+        except OSError:
+            pass
         return None
     
     # Проверяем время жизни сессии
     now = datetime.now(timezone.utc)
-    last_used = session_data['last_used']
+    try:
+        last_used = datetime.fromisoformat(session_data['last_used'])
+    except (ValueError, KeyError):
+        logger.debug(f"[AUTH] validate_session: неверный формат времени в сессии {session_id}")
+        # Удаляем поврежденный файл
+        try:
+            os.remove(session_file)
+        except OSError:
+            pass
+        return None
     
     # Проверяем не истекла ли сессия
     elapsed = (now - last_used).total_seconds()
     if elapsed > SESSION_LIFETIME_SECONDS:
         # Удаляем просроченную сессию
         logger.debug(f"[AUTH] validate_session: session_id={session_id} истекла (прошло {elapsed}с)")
-        del _session_store[session_id]
+        try:
+            os.remove(session_file)
+        except OSError:
+            pass
         return None
     
     # Обновляем время последнего использования
-    session_data['last_used'] = now
+    session_data['last_used'] = now.isoformat()
+    try:
+        with open(session_file, 'w') as f:
+            json.dump(session_data, f)
+    except IOError as e:
+        logger.debug(f"[AUTH] validate_session: ошибка обновления сессии {session_id}: {e}")
     
     logger.debug(f"[AUTH] validate_session: session_id={session_id} валидна, username={session_data['username']}")
     return session_data['username']
@@ -108,9 +145,14 @@ def delete_session(session_id: str) -> bool:
     Returns:
         bool: True если сессия была удалена, False если не существовала
     """
-    if session_id in _session_store:
-        del _session_store[session_id]
-        return True
+    session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
+    if os.path.exists(session_file):
+        try:
+            os.remove(session_file)
+            return True
+        except OSError as e:
+            logger.debug(f"[AUTH] delete_session: ошибка удаления файла сессии {session_id}: {e}")
+            return False
     return False
 
 
@@ -122,17 +164,40 @@ def cleanup_expired_sessions() -> int:
         int: Количество удаленных сессий
     """
     now = datetime.now(timezone.utc)
-    expired_ids = []
+    expired_count = 0
     
-    for session_id, session_data in _session_store.items():
-        last_used = session_data['last_used']
-        if (now - last_used).total_seconds() > SESSION_LIFETIME_SECONDS:
-            expired_ids.append(session_id)
+    # Проверяем все файлы сессий в директории
+    try:
+        for filename in os.listdir(SESSION_DIR):
+            if filename.endswith(".json"):
+                session_id = filename[:-5]  # Убираем .json
+                session_file = os.path.join(SESSION_DIR, filename)
+                
+                try:
+                    with open(session_file, 'r') as f:
+                        session_data = json.load(f)
+                    
+                    last_used = datetime.fromisoformat(session_data['last_used'])
+                    elapsed = (now - last_used).total_seconds()
+                    
+                    if elapsed > SESSION_LIFETIME_SECONDS:
+                        # Удаляем просроченную сессию
+                        os.remove(session_file)
+                        expired_count += 1
+                        
+                except (json.JSONDecodeError, IOError, KeyError, ValueError) as e:
+                    logger.debug(f"[AUTH] cleanup_expired_sessions: ошибка обработки {session_file}: {e}")
+                    # Удаляем поврежденный файл
+                    try:
+                        os.remove(session_file)
+                        expired_count += 1
+                    except OSError:
+                        pass
+                        
+    except OSError as e:
+        logger.debug(f"[AUTH] cleanup_expired_sessions: ошибка доступа к директории {SESSION_DIR}: {e}")
     
-    for session_id in expired_ids:
-        del _session_store[session_id]
-    
-    return len(expired_ids)
+    return expired_count
 
 
 # HTTPBasic для FastAPI (backward compatibility)

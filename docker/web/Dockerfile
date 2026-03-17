@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Создаем директории для приложения
-RUN mkdir -p /app/web /app/web/static /app/core /app/collector /app/database
+RUN mkdir -p /app/web /app/web/static /app/core /app/collector /app/database /app/sessions
 
 # Создаем маркерный файл в static для git и Docker
 RUN touch /app/web/static/.keep
