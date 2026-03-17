@@ -15,10 +15,11 @@ I7.6: Аутентификация обязательна (через Depends в
 
 from datetime import datetime
 from typing import Optional, List
+from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_, and_
+from sqlalchemy import func, case, or_, and_, desc, asc
 
 from core.models import Account, Session as SessionModel
 from web.dependencies import get_db
@@ -70,6 +71,8 @@ def list_accounts(
     is_revoked: Optional[bool] = Query(None, description="Фильтр по наличию отозванных сертификатов"),
     has_ccd: Optional[bool] = Query(None, description="Фильтр по наличию CCD"),
     search: Optional[str] = Query(None, description="Поиск по CN"),
+    sort_by: str = Query("cn", description="Поле для сортировки: cn, created_at, cert_count, active_certs"),
+    sort_order: str = Query("asc", description="Направление сортировки: asc, desc"),
     db: Session = Depends(get_db)
 ):
     """
@@ -106,6 +109,30 @@ def list_accounts(
     if search:
         query = query.filter(Account.cn.ilike(f"%{search}%"))
 
+    # Применяем сортировку ДО пагинации (ключевой момент!)
+    # Используем агрегированные поля для сортировки
+    sort_column_map = {
+        "cn": Account.cn,
+        "created_at": func.min(Account.created_at),
+        "cert_count": func.count(Account.id),
+        "active_certs": func.sum(case((and_(
+            Account.is_revoked == False,
+            or_(
+                Account.valid_to == None,
+                Account.valid_to >= datetime.utcnow()
+            )
+        ), 1), else_=0))
+    }
+    
+    # Валидация параметра сортировки
+    sort_column = sort_column_map.get(sort_by, Account.cn)
+    
+    # Применяем направление сортировки
+    if sort_order.lower() == "desc":
+        query = query.order_by(desc(sort_column))
+    else:
+        query = query.order_by(asc(sort_column))
+
     # I7.3: Пагинация
     total = query.count()
     items = query.offset((page - 1) * per_page).limit(per_page).all()
@@ -131,7 +158,9 @@ def list_accounts(
             "page": page,
             "per_page": per_page,
             "total": total,
-            "total_pages": total_pages
+            "total_pages": total_pages,
+            "sort_by": sort_by,
+            "sort_order": sort_order
         }
     }
 

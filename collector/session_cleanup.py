@@ -183,9 +183,17 @@ def cleanup_orphaned_sessions(db, connected_cns: Set[str] = None) -> Tuple[int, 
         try:
             from collector.mgmt_client import get_connected_clients
             connected_cns = get_connected_clients()
+            mgmt_count = len(connected_cns)
+            logger.info(f"MGMT interface returned {mgmt_count} connected clients")
+            
+            if mgmt_count == 0:
+                logger.error("MGMT interface returned 0 clients - ALL active sessions will be marked as orphaned!")
         except Exception as e:
             logger.error(f"Failed to get connected clients from mgmt: {e}")
-            connected_cns = set()
+            # ПРИ НЕУДАЧЕ НЕ помечаем все сессии как orphaned!
+            # Если mgmt недоступен, пропускаем cleanup для предотвращения ложных срабатываний
+            logger.warning("Skipping orphaned session cleanup - mgmt interface unavailable")
+            return active_count, 0
 
     logger.info(f"Found {len(connected_cns)} connected clients in mgmt interface")
 

@@ -54,9 +54,9 @@
                                     {% if account.revoked_at %}
                                         <small class="text-muted d-block">
                                             {% if account.revoked_at is string %}
-                                                {{ account.revoked_at[:16] }}
+                                                {{ account.revoked_at[:16] | local_datetime }}
                                             {% else %}
-                                                {{ account.revoked_at.strftime('%Y-%m-%d %H:%M') }}
+                                                {{ account.revoked_at | local_datetime }}
                                             {% endif %}
                                         </small>
                                     {% endif %}
@@ -101,9 +101,9 @@
                         <td>
                             {% if account.created_at %}
                                 {% if account.created_at is string %}
-                                    {{ account.created_at[:16] }}
+                                    {{ account.created_at[:16] | local_datetime }}
                                 {% else %}
-                                    {{ account.created_at.strftime('%Y-%m-%d %H:%M') }}
+                                    {{ account.created_at | local_datetime }}
                                 {% endif %}
                             {% else %}-{% endif %}
                         </td>
@@ -113,9 +113,9 @@
                         <td>
                             {% if account.updated_at %}
                                 {% if account.updated_at is string %}
-                                    {{ account.updated_at[:16] }}
+                                    {{ account.updated_at[:16] | local_datetime }}
                                 {% else %}
-                                    {{ account.updated_at.strftime('%Y-%m-%d %H:%M') }}
+                                    {{ account.updated_at | local_datetime }}
                                 {% endif %}
                             {% else %}-{% endif %}
                         </td>
@@ -138,7 +138,7 @@
                                 {% if account.valid_from is string %}
                                     {{ account.valid_from[:10] }}
                                 {% else %}
-                                    {{ account.valid_from.strftime('%Y-%m-%d') }}
+                                    {{ account.valid_from | local_datetime | truncate(10, true, '') }}
                                 {% endif %}
                             {% else %}
                                 <span class="text-muted">-</span>
@@ -156,10 +156,10 @@
                                         {{ account.valid_to[:10] }}
                                     {% endif %}
                                 {% else %}
-                                    {% if account.valid_to.strftime('%Y-%m-%d') < now.strftime('%Y-%m-%d') %}
-                                        <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
+                                    {% if account.valid_to | local_datetime < now %}
+                                        <span class="text-danger">{{ (account.valid_to | local_datetime)[:10] }} (Expired)</span>
                                     {% else %}
-                                        {{ account.valid_to.strftime('%Y-%m-%d') }}
+                                        {{ (account.valid_to | local_datetime)[:10] }}
                                     {% endif %}
                                 {% endif %}
                             {% else %}
@@ -200,9 +200,9 @@
                                 <td class="text-muted">Connected:</td>
                                 <td>
                                     {% if account.last_session.connected_at is string %}
-                                        {{ account.last_session.connected_at[:19] }}
+                                        {{ account.last_session.connected_at[:19] | local_datetime }}
                                     {% else %}
-                                        {{ account.last_session.connected_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                        {{ account.last_session.connected_at | local_datetime }}
                                     {% endif %}
                                 </td>
                             </tr>
@@ -211,9 +211,9 @@
                                 <td class="text-muted">Disconnected:</td>
                                 <td>
                                     {% if account.last_session.disconnected_at is string %}
-                                        {{ account.last_session.disconnected_at[:19] }}
+                                        {{ account.last_session.disconnected_at[:19] | local_datetime }}
                                     {% else %}
-                                        {{ account.last_session.disconnected_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                        {{ account.last_session.disconnected_at | local_datetime }}
                                     {% endif %}
                                 </td>
                             </tr>
@@ -276,9 +276,9 @@
                             <tr>
                                 <td>
                                     {% if session.connected_at is string %}
-                                        {{ session.connected_at[:16] }}
+                                        {{ session.connected_at[:16] | local_datetime }}
                                     {% else %}
-                                        {{ session.connected_at.strftime('%Y-%m-%d %H:%M') }}
+                                        {{ session.connected_at | local_datetime }}
                                     {% endif %}
                                 </td>
                                 <td>

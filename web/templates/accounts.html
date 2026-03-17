@@ -12,6 +12,10 @@
 <div class="card mb-4">
     <div class="card-body">
         <form method="get" action="/accounts" class="row g-3">
+            <!-- Скрытые поля для сортировки -->
+            <input type="hidden" name="sort_by" value="{{ accounts.meta.sort_by or 'cn' }}">
+            <input type="hidden" name="sort_order" value="{{ accounts.meta.sort_order or 'asc' }}">
+            
             <div class="col-md-4">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -46,15 +50,55 @@
 <div class="card">
     <div class="card-body">
         <div class="table-responsive">
-            <table class="table table-hover" id="accountsTable">
+            <table class="table table-hover">
                 <thead>
                     <tr>
-                        <th>CN</th>
+                        {# 
+                            Заголовки сортировки: 
+                            - При клике переключается asc/desc для соответствующего поля
+                            - Текущее поле подсвечивается иконкой
+                        #}
+                        <th>
+                            {% set sort_cn = 'asc' if accounts.meta.sort_by != 'cn' or accounts.meta.sort_order == 'desc' else 'desc' %}
+                            <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=cn&sort_order={{ sort_cn }}" 
+                               class="text-dark text-decoration-none">
+                                CN
+                                {% if accounts.meta.sort_by == 'cn' %}
+                                    <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
+                                {% endif %}
+                            </a>
+                        </th>
                         <th>Status</th>
-                        <th>CCD</th>
-                        <th>Valid From</th>
-                        <th>Valid To</th>
-                        <th>Created</th>
+                        <th>
+                            {% set sort_ccd = 'asc' if accounts.meta.sort_by != 'has_ccd' or accounts.meta.sort_order == 'desc' else 'desc' %}
+                            <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=has_ccd&sort_order={{ sort_ccd }}" 
+                               class="text-dark text-decoration-none">
+                                CCD
+                                {% if accounts.meta.sort_by == 'has_ccd' %}
+                                    <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            {% set sort_created = 'asc' if accounts.meta.sort_by != 'created_at' or accounts.meta.sort_order == 'desc' else 'desc' %}
+                            <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=created_at&sort_order={{ sort_created }}" 
+                               class="text-dark text-decoration-none">
+                                Created
+                                {% if accounts.meta.sort_by == 'created_at' %}
+                                    <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
+                            {% set sort_active = 'asc' if accounts.meta.sort_by != 'active_certs' or accounts.meta.sort_order == 'desc' else 'desc' %}
+                            <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=active_certs&sort_order={{ sort_active }}" 
+                               class="text-dark text-decoration-none">
+                                Active Certs
+                                {% if accounts.meta.sort_by == 'active_certs' %}
+                                    <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
+                                {% endif %}
+                            </a>
+                        </th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -66,10 +110,10 @@
                             <strong>{{ account.cn }}</strong>
                         </td>
                         <td>
-                            {% if account.is_revoked %}
-                                <span class="badge badge-revoked">Revoked</span>
-                            {% else %}
+                            {% if account.has_active_cert %}
                                 <span class="badge bg-success">Active</span>
+                            {% else %}
+                                <span class="badge badge-revoked">Revoked</span>
                             {% endif %}
                         </td>
                         <td>
@@ -80,42 +124,17 @@
                             {% endif %}
                         </td>
                         <td>
-                            {% if account.valid_from %}
-                                {% if account.valid_from is string %}
-                                    {{ account.valid_from[:10] }}
+                            {% if account.created_at %}
+                                {% if account.created_at is string %}
+                                    {{ account.created_at[:10] }}
                                 {% else %}
-                                    {{ account.valid_from.strftime('%Y-%m-%d') }}
+                                    {{ account.created_at | local_datetime | truncate(10, true, '') }}
                                 {% endif %}
                             {% else %}
                                 <span class="text-muted">-</span>
                             {% endif %}
                         </td>
-                        <td>
-                            {% if account.valid_to %}
-                                {% if account.valid_to is string %}
-                                    {% if account.valid_to[:10] < now.strftime('%Y-%m-%d') %}
-                                        <span class="text-danger">{{ account.valid_to[:10] }} (Expired)</span>
-                                    {% else %}
-                                        {{ account.valid_to[:10] }}
-                                    {% endif %}
-                                {% else %}
-                                    {% if account.valid_to.strftime('%Y-%m-%d') < now.strftime('%Y-%m-%d') %}
-                                        <span class="text-danger">{{ account.valid_to.strftime('%Y-%m-%d') }} (Expired)</span>
-                                    {% else %}
-                                        {{ account.valid_to.strftime('%Y-%m-%d') }}
-                                    {% endif %}
-                                {% endif %}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if account.created_at is string %}
-                                {{ account.created_at[:10] }}
-                            {% else %}
-                                {{ account.created_at.strftime('%Y-%m-%d') }}
-                            {% endif %}
-                        </td>
+                        <td>{{ account.active_certs }}</td>
                         <td class="table-actions">
                             <a href="/accounts/{{ account.cn }}" class="btn btn-sm btn-outline-primary">
                                 <i class="bi bi-eye"></i> View
@@ -124,7 +143,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="text-center text-muted py-4">
+                        <td colspan="6" class="text-center text-muted py-4">
                             <i class="bi bi-inbox fs-1"></i>
                             <p class="mt-2">No accounts found</p>
                         </td>
@@ -134,13 +153,13 @@
             </table>
         </div>
         
-        <!-- Пагинация -->
+        <!-- Пагинация с сохранением параметров сортировки -->
         {% if accounts.meta.total_pages > 1 %}
         <nav aria-label="Page navigation">
             <ul class="pagination justify-content-center">
                 {% if accounts.meta.page > 1 %}
                 <li class="page-item">
-                    <a class="page-link" href="/accounts?page={{ accounts.meta.page - 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">
+                    <a class="page-link" href="/accounts?page={{ accounts.meta.page - 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by={{ accounts.meta.sort_by or 'cn' }}&sort_order={{ accounts.meta.sort_order or 'asc' }}">
                         <i class="bi bi-chevron-left"></i> Previous
                     </a>
                 </li>
@@ -151,7 +170,7 @@
                         <li class="page-item active"><span class="page-link">{{ p }}</span></li>
                     {% elif p <= 3 or p > accounts.meta.total_pages - 3 or (p >= accounts.meta.page - 1 and p <= accounts.meta.page + 1) %}
                         <li class="page-item">
-                            <a class="page-link" href="/accounts?page={{ p }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">{{ p }}</a>
+                            <a class="page-link" href="/accounts?page={{ p }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by={{ accounts.meta.sort_by or 'cn' }}&sort_order={{ accounts.meta.sort_order or 'asc' }}">{{ p }}</a>
                         </li>
                     {% elif p == 4 or p == accounts.meta.total_pages - 3 %}
                         <li class="page-item disabled"><span class="page-link">...</span></li>
@@ -160,7 +179,7 @@
                 
                 {% if accounts.meta.page < accounts.meta.total_pages %}
                 <li class="page-item">
-                    <a class="page-link" href="/accounts?page={{ accounts.meta.page + 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}">
+                    <a class="page-link" href="/accounts?page={{ accounts.meta.page + 1 }}&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by={{ accounts.meta.sort_by or 'cn' }}&sort_order={{ accounts.meta.sort_order or 'asc' }}">
                         Next <i class="bi bi-chevron-right"></i>
                     </a>
                 </li>
@@ -172,21 +191,15 @@
         <div class="text-center text-muted">
             <small>Showing {{ ((accounts.meta.page - 1) * accounts.meta.per_page) + 1 }} - 
                    {{ [accounts.meta.page * accounts.meta.per_page, accounts.meta.total] | min }} 
-                   of {{ accounts.meta.total }} accounts</small>
+                   of {{ accounts.meta.total }} accounts
+                   {# Показываем инфо о сортировке #}
+                   {% if accounts.meta.sort_by %}&nbsp;|&nbsp;<i class="bi bi-sort-{{ 'down' if accounts.meta.sort_order == 'asc' else 'up' }}"></i> Sorted by {{ accounts.meta.sort_by }}{% endif %}
+            </small>
         </div>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
-<script>
-    $(document).ready(function() {
-        $('#accountsTable').DataTable({
-            paging: false,
-            searching: false,
-            info: false,
-            order: [[0, 'asc']]
-        });
-    });
-</script>
+{# DataTable удалён - теперь используется server-side sorting #}
 {% endblock %}

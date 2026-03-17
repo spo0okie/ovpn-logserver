@@ -6,7 +6,8 @@ I8.2: Все страницы требуют аутентификации
 """
 
 import base64
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -15,12 +16,21 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from core.config import get_web_auth_credentials
+from web.utils.timezone import format_datetime, get_local_tz
+from web.auth import create_session, delete_session, validate_session
+
+# Настраиваем логирование
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(tags=["pages"])
 
 # Настройка шаблонов Jinja2
 templates = Jinja2Templates(directory="web/templates")
+
+# Регистрируем фильтр для конвертации UTC времени в локальное
+# Используется в шаблонах: {{ datetime | local_datetime }}
+templates.env.filters['local_datetime'] = format_datetime
 
 
 def get_api_base_url(request: Request) -> str:
@@ -108,40 +118,61 @@ def login_submit(
     password: str = Form(...),
     remember: bool = Form(False)
 ):
-    """Обработка формы входа."""
+    """
+    Обработка формы входа.
+    
+    При успешном входе создает сессию и устанавливает session_id cookie.
+    """
+    logger.info(f"[LOGIN] Попытка входа: username={username}")
+    
     if not verify_credentials(username, password):
+        logger.warning(f"[LOGIN] Неверные учетные данные: username={username}")
         return templates.TemplateResponse(
             "login.html",
             {"request": request, "error": "Invalid username or password"},
             status_code=401
         )
     
-    # Используем cookie для хранения авторизации
+    # Создаем сессию
+    session_id = create_session(username)
+    logger.info(f"[LOGIN] Сессия создана: session_id={session_id}, username={username}")
+    
+    # Устанавливаем session_id cookie
     response = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
     response.set_cookie(
-        key="auth",
-        value=credentials,
+        key="session_id",
+        value=session_id,
         max_age=86400 if remember else 3600,  # 1 день или 1 час
-        httponly=True,
+        httponly=True,  # Защита от XSS
+        samesite="lax",
         secure=False  # В продакшене установить True
     )
+    logger.debug(f"[LOGIN] Cookie установлена: session_id={session_id}")
+    logger.debug(f"[LOGIN] Response headers: {dict(response.headers)}")
     
-    # Также пробуем установить сессию если доступна
+    # Также пробуем установить сессию если доступна (FastAPI session middleware)
     try:
         if "session" in request.scope:
             request.session["user"] = username
-            request.session["password"] = password
     except Exception:
         pass
     
+    logger.info(f"[LOGIN] Успешный вход: username={username}, перенаправление на /")
     return response
 
 
 @router.get("/logout")
 def logout(request: Request):
-    """Выход из системы."""
+    """Выход из системы - удаляет сессию."""
+    # Получаем session_id из cookie для удаления
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        delete_session(session_id)
+    
     response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    response.delete_cookie("session_id")
+    
+    # Также удаляем old auth cookie для backward compatibility
     response.delete_cookie("auth")
     
     # Проверяем наличие session без вызова свойства
@@ -166,8 +197,10 @@ def dashboard(request: Request):
     I8.1: Получаем данные через API
     I8.2: Требуется аутентификация
     """
+    logger.debug(f"[DASHBOARD] Запрос к dashboard, cookies: {list(request.cookies.keys())}")
     # Получаем авторизационные заголовки
     auth_headers = _get_auth_from_cookie(request)
+    logger.debug(f"[DASHBOARD] Авторизация успешна")
     
     try:
         # I8.1: Запрос к API для получения статистики
@@ -191,7 +224,7 @@ def dashboard(request: Request):
         {
             "request": request,
             "stats": stats,
-            "now": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            "now": format_datetime(datetime.now(timezone.utc))
         }
     )
 
@@ -207,7 +240,9 @@ def accounts_list(
     per_page: int = 20,
     search: Optional[str] = None,
     is_revoked: Optional[str] = None,
-    has_ccd: Optional[str] = None
+    has_ccd: Optional[str] = None,
+    sort_by: str = "cn",
+    sort_order: str = "asc"
 ):
     """
     Список аккаунтов.
@@ -217,12 +252,12 @@ def accounts_list(
     auth_headers = _get_auth_from_cookie(request)
     
     # Формируем параметры запроса
-    params = {"page": page, "per_page": per_page}
+    params = {"page": page, "per_page": per_page, "sort_by": sort_by, "sort_order": sort_order}
     if search:
         params["search"] = search
-    if is_revoked is not None:
+    if is_revoked is not None and is_revoked != "":
         params["is_revoked"] = is_revoked.lower() == "true"
-    if has_ccd is not None:
+    if has_ccd is not None and has_ccd != "":
         params["has_ccd"] = has_ccd.lower() == "true"
     
     try:
@@ -235,7 +270,7 @@ def accounts_list(
         response.raise_for_status()
         accounts = response.json()
     except Exception:
-        accounts = {"data": [], "meta": {"page": 1, "per_page": per_page, "total": 0, "total_pages": 0}}
+        accounts = {"data": [], "meta": {"page": 1, "per_page": per_page, "total": 0, "total_pages": 0, "sort_by": sort_by, "sort_order": sort_order}}
     
     return templates.TemplateResponse(
         "accounts.html",
@@ -245,7 +280,7 @@ def accounts_list(
             "search": search,
             "is_revoked": is_revoked,
             "has_ccd": has_ccd,
-            "now": datetime.utcnow()
+            "now": format_datetime(datetime.now(timezone.utc))
         }
     )
 
@@ -300,7 +335,7 @@ def account_detail(
             "account": account,
             "cn": cn,  # Передаем cn отдельно для случая когда account пустой
             "sessions": sessions,
-            "now": datetime.utcnow()
+            "now": format_datetime(datetime.now(timezone.utc))
         }
     )
 
@@ -322,32 +357,20 @@ def sessions_list(
     """
     Журнал сессий.
     
-    I8.1: Получаем данные через API
+    I8.1: Получаем данные через API (DataTables будет загружать через AJAX)
+    
+    Архитектура:
+    - Сервер НЕ загружает данные, только рендерит пустую таблицу
+    - DataTables инициализируется с serverSide: true
+    - DataTables загружает данные через AJAX запрос к /api/v1/sessions
+    - Пользователь видит "Loading..." пока данные загружаются
+    - Результат: одна пагинация, управляемая DataTables
     """
     auth_headers = _get_auth_from_cookie(request)
     
-    # Формируем параметры запроса
-    params = {"page": page, "per_page": per_page}
-    if account:
-        params["account"] = account
-    if source_ip:
-        params["source_ip"] = source_ip
-    if status:
-        params["status"] = status
-    if country:
-        params["country"] = country
-    
-    try:
-        response = requests.get(
-            "http://127.0.0.1:8000/api/v1/sessions",
-            headers=auth_headers,
-            params=params,
-            timeout=5
-        )
-        response.raise_for_status()
-        sessions = response.json()
-    except Exception:
-        sessions = {"data": [], "meta": {"page": 1, "per_page": per_page, "total": 0, "total_pages": 0}}
+    # Не загружаем данные на сервере - DataTables загрузит через AJAX
+    # Передаём только параметры фильтров в шаблон для инициализации DataTables
+    sessions = {"data": [], "meta": {"page": 1, "per_page": per_page, "total": 0, "total_pages": 0}}
     
     return templates.TemplateResponse(
         "sessions.html",
@@ -421,21 +444,53 @@ def attempts_list(
 
 def _get_auth_from_cookie(request: Request) -> dict:
     """
-    Получает авторизационные заголовки из cookie или возвращает пустые.
+    Получает авторизационные заголовки для API запросов.
+    
+    Поддерживает:
+    1. session_id cookie - автоматически передается браузером
+    2. Authorization заголовок - для AJAX запросов
+    3. auth cookie (old) - backward compatibility
     
     I8.2: Проверка аутентификации.
+    
+    Returns:
+        dict: Заголовки для API запроса
     """
-    auth_cookie = request.cookies.get("auth")
+    from web.auth import validate_session
     
-    if auth_cookie:
-        return {"Authorization": f"Basic {auth_cookie}"}
+    logger.debug(f"[AUTH] _get_auth_from_cookie: проверка авторизации")
+    logger.debug(f"[AUTH] Cookies: {list(request.cookies.keys())}")
     
-    # Проверяем заголовок Authorization
+    # Приоритет 1: Session ID из cookie (для веб-интерфейса)
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        logger.debug(f"[AUTH] Найден session_id cookie: {session_id}")
+        username = validate_session(session_id)
+        if username:
+            logger.debug(f"[AUTH] Session валидна, username={username}")
+            # Для API запросов используем Basic Auth с учетными данными из конфигурации
+            auth_config = get_web_auth_credentials()
+            valid_username = auth_config.get("username", "admin")
+            valid_password = auth_config.get("password", "admin")
+            credentials = base64.b64encode(f"{valid_username}:{valid_password}".encode()).decode()
+            logger.debug(f"[AUTH] Возвращаем Authorization заголовок для API запроса")
+            return {"Authorization": f"Basic {credentials}"}
+        logger.debug(f"[AUTH] Session невалидна")
+    
+    # Приоритет 2: Authorization заголовок (для AJAX запросов)
     auth_header = request.headers.get("Authorization")
     if auth_header:
+        logger.debug(f"[AUTH] Найден Authorization заголовок")
         return {"Authorization": auth_header}
     
+    # Приоритет 3: Старый auth cookie (backward compatibility)
+    auth_cookie = request.cookies.get("auth")
+    if auth_cookie:
+        logger.debug(f"[AUTH] Найден старый auth cookie")
+        return {"Authorization": f"Basic {auth_cookie}"}
+    
     # Если нет авторизации, перенаправляем на login
+    logger.warning(f"[AUTH] Нет авторизации, перенаправление на /login")
     raise HTTPException(
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         headers={"Location": "/login"}

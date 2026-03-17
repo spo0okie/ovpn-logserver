@@ -10,11 +10,11 @@ I7.6: Аутентификация обязательна (через Depends в
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import or_, func
 
 from core.models import Account, Session as SessionModel
 from web.dependencies import get_db
@@ -56,12 +56,18 @@ def _session_to_list_item(session: SessionModel, account_cn: str) -> dict:
 
 @router.get(
     "/sessions",
-    response_model=SessionListResponse,
+    response_model=Union[SessionListResponse, dict],
     responses={401: {"model": ErrorResponse}}
 )
 def list_sessions(
     page: int = Query(1, ge=1, description="Номер страницы"),
     per_page: int = Query(20, ge=1, le=100, description="Элементов на страницу"),
+    # Параметры для DataTable серверной обработки
+    draw: Optional[int] = Query(None, description="DataTable draw counter"),
+    search: Optional[str] = Query(None, description="DataTable глобальный поиск"),
+    order_col: Optional[int] = Query(None, description="Номер колонки для сортировки"),
+    order_dir: Optional[str] = Query(None, description="Направление сортировки"),
+    # Стандартные фильтры
     account: Optional[str] = Query(None, description="Фильтр по CN аккаунта"),
     from_date: Optional[datetime] = Query(None, alias="from", description="Начало периода"),
     to_date: Optional[datetime] = Query(None, alias="to", description="Конец периода"),
@@ -76,13 +82,14 @@ def list_sessions(
     I7.1: Только SELECT запросы
     I7.3: Пагинация через page/per_page
     I7.4: Фильтры account, from, to, status, source_ip, country
+    Поддержка DataTable серверной обработки (search, order, pagination)
     """
     # I7.1: Только SELECT запросы
     query = db.query(SessionModel, Account.cn).join(
         Account, SessionModel.account_id == Account.id
     )
 
-    # I7.4: Применяем фильтры
+    # I7.4: Применяем фильтры из формы
     if account:
         query = query.filter(Account.cn == account)
     if from_date:
@@ -95,8 +102,44 @@ def list_sessions(
         query = query.filter(SessionModel.source_ip == source_ip)
     if country:
         query = query.filter(SessionModel.country.ilike(f"%{country}%"))
+    
+    # DataTable глобальный поиск по всем столбцам
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                Account.cn.ilike(search_pattern),
+                SessionModel.source_ip.ilike(search_pattern),
+                SessionModel.virtual_ip.ilike(search_pattern),
+                SessionModel.country.ilike(search_pattern),
+                SessionModel.city.ilike(search_pattern)
+            )
+        )
 
-    query = query.order_by(SessionModel.connected_at.desc())
+    # Сортировка
+    # NOTE: duration_seconds - вычисляемое поле, не колонка БД
+    # Убрано из сортировки, т.к. оно вычисляется динамически из connected_at/disconnected_at
+    order_columns = {
+        0: SessionModel.id,
+        1: Account.cn,
+        2: SessionModel.connected_at,
+        # 3: SessionModel.duration_seconds,  # <-- ERROR: attribute doesn't exist
+        4: SessionModel.source_ip,
+        5: SessionModel.country,
+        6: SessionModel.virtual_ip,
+        7: SessionModel.status
+    }
+    
+    if order_col is not None:
+        if order_col in order_columns:
+            order_expr = order_columns[order_col]
+            if order_dir == "desc":
+                order_expr = order_expr.desc()
+            query = query.order_by(order_expr)
+        elif order_col == 3:  # duration_seconds - сортируем по connected_at desc как fallback
+            query = query.order_by(SessionModel.connected_at.desc())
+    else:
+        query = query.order_by(SessionModel.connected_at.desc())
 
     # I7.3: Пагинация
     total = query.count()
@@ -104,8 +147,21 @@ def list_sessions(
 
     total_pages = (total + per_page - 1) // per_page
 
+    # Преобразуем данные
+    data = [_session_to_list_item(s, cn) for s, cn in items]
+
+    # Возвращаем DataTable-совместимый формат если передан draw
+    if draw is not None:
+        return {
+            "draw": draw,
+            "recordsTotal": total,
+            "recordsFiltered": total,
+            "data": data
+        }
+
+    # Возвращаем стандартный формат с метаданными пагинации
     return {
-        "data": [_session_to_list_item(s, cn) for s, cn in items],
+        "data": data,
         "meta": {
             "page": page,
             "per_page": per_page,

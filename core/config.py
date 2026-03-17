@@ -258,6 +258,7 @@ def _get_default_openvpn_config() -> Dict[str, Any]:
         "cert_extension": ".crt",
         "crl_file": "/etc/openvpn/crl.pem",
         "ccd_dir": "/etc/openvpn/ccd",
+        "management_socket": "/var/run/openvpn/mgmt.sock",
     }
 
 
@@ -272,6 +273,7 @@ def get_openvpn_paths() -> Dict[str, str]:
             - cert_extension: расширение файлов сертификатов
             - crl_file: путь к CRL файлу
             - ccd_dir: директория с CCD файлами
+            - management_socket: путь к Management Interface сокету
     """
     cfg = load_openvpn_config()
     return {
@@ -280,4 +282,5 @@ def get_openvpn_paths() -> Dict[str, str]:
         "cert_extension": cfg.get("cert_extension", ".crt"),
         "crl_file": cfg.get("crl_file", "/etc/openvpn/crl.pem"),
         "ccd_dir": cfg.get("ccd_dir", "/etc/openvpn/ccd"),
+        "management_socket": cfg.get("management_socket", "/var/run/openvpn/mgmt.sock"),
     }

@@ -66,13 +66,9 @@
                     <tr>
                         <td>
                             {% if attempt.attempted_at is string %}
-                                {{ attempt.attempted_at[:19] }}
-                                <br>
-                                <small class="text-muted">{{ attempt.attempted_at[20:25] if attempt.attempted_at|length > 20 else 'UTC' }}</small>
+                                {{ attempt.attempted_at[:19] | local_datetime }}
                             {% else %}
-                                {{ attempt.attempted_at.strftime('%Y-%m-%d %H:%M:%S') }}
-                                <br>
-                                <small class="text-muted">{{ attempt.attempted_at.strftime('%Z') }}</small>
+                                {{ attempt.attempted_at | local_datetime }}
                             {% endif %}
                         </td>
                         <td>

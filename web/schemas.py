@@ -21,6 +21,8 @@ class PaginationMeta(BaseModel):
     per_page: int = Field(..., description="Количество элементов на страницу")
     total: int = Field(..., description="Общее количество элементов")
     total_pages: int = Field(..., description="Общее количество страниц")
+    sort_by: Optional[str] = Field(None, description="Поле для сортировки")
+    sort_order: Optional[str] = Field(None, description="Направление сортировки: asc, desc")
 
 
 class PaginatedResponse(BaseModel):

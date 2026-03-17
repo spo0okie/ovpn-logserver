@@ -23,21 +23,14 @@ from typing import Set, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from collector.config import OPENVPN_DIR
+    from collector.config import OPENVPN_DIR, MGMT_SOCKET_PATH
 except ImportError:
     # Fallback если config не загружен
     OPENVPN_DIR = os.getenv("OPENVPN_DIR", "/var/run/openvpn")
-
-# ============================================================================
-# Путь к Management Interface сокету
-# M1.2: Читается из конфигурации, не захардкожен
-# ============================================================================
-
-# Путь к сокету Management Interface
-MGMT_SOCKET_PATH = os.getenv(
-    "OPENVPN_MGMT_SOCKET",
-    os.path.join(OPENVPN_DIR, "mgmt.sock")
-)
+    MGMT_SOCKET_PATH = os.getenv(
+        "OPENVPN_MGMT_SOCKET",
+        os.path.join(OPENVPN_DIR, "mgmt.sock")
+    )
 
 # ============================================================================
 # Настройка логирования
@@ -49,9 +42,14 @@ logger = logging.getLogger(__name__)
 def get_mgmt_socket_path() -> str:
     """
     Возвращает путь к Management Interface сокету.
-
+    
+    Путь читается из конфигурации в следующем порядке приоритета:
+    1. Переменная окружения OPENVPN_MGMT_SOCKET
+    2. Файл config/openvpn.yaml (management_socket)
+    3. Значение по умолчанию: /var/run/openvpn/mgmt.sock
+    
     Returns:
-        str: Путь к сокету из переменной окружения или конфигурации
+        str: Путь к сокету из конфигурации
     """
     return MGMT_SOCKET_PATH
 
@@ -82,10 +80,19 @@ def get_connected_clients(mgmt_socket_path: Optional[str] = None) -> Set[str]:
     logger.debug(f"Connecting to Management Interface socket: {mgmt_socket_path}")
 
     try:
+        # Проверяем существование сокета
+        if not os.path.exists(mgmt_socket_path):
+            logger.error(f"Management Interface socket not found: {mgmt_socket_path}")
+            return set()
+        
+        logger.debug(f"Connecting to Management Interface socket: {mgmt_socket_path}")
+
         # Подключаемся к Unix-сокету Management Interface
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(5.0)  # Таймаут 5 секунд
         sock.connect(mgmt_socket_path)
+
+        logger.debug(f"Successfully connected to Management Interface socket")
 
         # Отправляем команду 'status 3' для получения списка клиентов
         # 'status 3' возвращает список клиентов в формате CLIENT_LIST
@@ -103,23 +110,32 @@ def get_connected_clients(mgmt_socket_path: Optional[str] = None) -> Set[str]:
                 if b"END" in response:
                     break
             except socket.timeout:
+                logger.debug("Socket read timeout")
                 break
 
         sock.close()
 
+        # Логируем полный ответ для отладки
+        logger.debug(f"MGMT raw response ({len(response)} bytes): {response}")
+
         # Парсим ответ и извлекаем CN клиентов
         clients = parse_clients_from_response(response.decode('utf-8', errors='ignore'))
 
-        logger.debug(f"Found {len(clients)} active clients: {clients}")
+        logger.info(f"MGMT: Found {len(clients)} active clients")
+        if len(clients) > 0:
+            logger.debug(f"Active clients: {clients}")
+        else:
+            logger.warning(f"MGMT returned 0 clients - response preview: {response[:500]}")
+        
         return clients
 
     except (socket.error, OSError, IOError) as e:
         # M1.4: Graceful degradation - возвращаем пустое множество
-        logger.warning(f"Cannot connect to Management Interface at {mgmt_socket_path}: {e}")
+        logger.error(f"Cannot connect to Management Interface at {mgmt_socket_path}: {e}")
         return set()
     except Exception as e:
         # Любая другая ошибка также должна возвращать пустое множество
-        logger.error(f"Unexpected error getting connected clients: {e}")
+        logger.error(f"Unexpected error getting connected clients from {mgmt_socket_path}: {e}")
         return set()
 
 
@@ -128,7 +144,9 @@ def parse_clients_from_response(response: str) -> Set[str]:
     Парсит ответ Management Interface и извлекает Common Names клиентов.
 
     Формат ответа команды 'status 3':
-    CLIENT_LIST,Common Name,Real Address,Virtual Address,...
+    CLIENT_LIST<tab>Common Name<tab>Real Address<tab>...
+    или
+    CLIENT_LIST Common Name Real Address ...
 
     Args:
         response: Текстовый ответ от Management Interface
@@ -139,10 +157,12 @@ def parse_clients_from_response(response: str) -> Set[str]:
     clients = set()
 
     for line in response.splitlines():
-        # Ищем строки начинающиеся с "CLIENT_LIST,"
-        # Формат: CLIENT_LIST,CN,Real Address,Virtual Address,...
-        if line.startswith("CLIENT_LIST,"):
-            parts = line.split(",")
+        # Ищем строки начинающиеся с "CLIENT_LIST" (с пробелом или табом)
+        # Формат: CLIENT_LIST<tab>CN<tab>Real Address<tab>...
+        stripped = line.lstrip()
+        if stripped.startswith("CLIENT_LIST"):
+            # Убираем префикс CLIENT_LIST и разбиваем по пробелам/табам
+            parts = stripped.split()
             if len(parts) >= 2:
                 cn = parts[1]
                 if cn:  # Проверяем что CN не пустой

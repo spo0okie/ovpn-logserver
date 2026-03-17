@@ -29,6 +29,7 @@ except Exception:
         "cert_extension": ".crt",
         "crl_file": "/etc/openvpn/crl.pem",
         "ccd_dir": "/etc/openvpn/ccd",
+        "management_socket": "/var/run/openvpn/mgmt.sock",
     }
 
 # Базовая директория OpenVPN
@@ -66,6 +67,13 @@ CERT_EXTENSION = os.getenv(
     _openvpn_paths.get("cert_extension", ".crt")
 )
 
+# Путь к Management Interface сокету OpenVPN (M1.2)
+# Приоритет: переменная окружения > config/openvpn.yaml > дефолт
+MGMT_SOCKET_PATH = os.getenv(
+    "OPENVPN_MGMT_SOCKET",
+    _openvpn_paths.get("management_socket", "/var/run/openvpn/mgmt.sock")
+)
+
 
 def get_config_summary():
     """
@@ -80,6 +88,7 @@ def get_config_summary():
         "crl_file": CRL_FILE,
         "ccd_dir": CCD_DIR,
         "cert_extension": CERT_EXTENSION,
+        "mgmt_socket_path": MGMT_SOCKET_PATH,
     }
 
 

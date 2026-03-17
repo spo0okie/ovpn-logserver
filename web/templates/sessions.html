@@ -18,7 +18,7 @@
 <!-- Фильтры -->
 <div class="card mb-4">
     <div class="card-body">
-        <form method="get" action="/sessions" class="row g-3">
+        <form method="get" action="/sessions" class="row g-3" id="filterForm">
             <div class="col-md-3">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-person"></i></span>
@@ -56,7 +56,7 @@
     </div>
 </div>
 
-<!-- Таблица сессий -->
+<!-- Таблица сессий (управляется DataTables) -->
 <div class="card">
     <div class="card-body">
         <div class="table-responsive">
@@ -75,112 +75,17 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for session in sessions.data %}
-                    <tr>
-                        <td><code>#{{ session.id }}</code></td>
-                        <td>
-                            <a href="/accounts/{{ session.account_cn }}" class="text-decoration-none">
-                                <i class="bi bi-person-circle text-primary"></i> {{ session.account_cn }}
-                            </a>
-                        </td>
-                        <td>
-                            {% if session.connected_at is string %}
-                                {{ session.connected_at[:16] }}
-                            {% else %}
-                                {{ session.connected_at.strftime('%Y-%m-%d %H:%M') }}
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if session.duration_seconds %}
-                                {% set hours = session.duration_seconds // 3600 %}
-                                {% set minutes = (session.duration_seconds % 3600) // 60 %}
-                                {% if hours > 0 %}
-                                    {{ hours }}h {{ minutes }}m
-                                {% else %}
-                                    {{ minutes }}m
-                                {% endif %}
-                            {% else %}
-                                {% if session.status == 'active' %}
-                                    <span class="text-success"><i class="bi bi-broadcast"></i> Active</span>
-                                {% else %}
-                                    <span class="text-muted">-</span>
-                                {% endif %}
-                            {% endif %}
-                        </td>
-                        <td><code>{{ session.source_ip }}</code></td>
-                        <td>
-                            {% if session.geo.country %}
-                                {{ session.geo.country }}{% if session.geo.city %}, {{ session.geo.city }}{% endif %}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
-                        <td><code>{{ session.virtual_ip or '-' }}</code></td>
-                        <td>
-                            {% if session.status == 'active' %}
-                                <span class="badge badge-active">Active</span>
-                            {% else %}
-                                <span class="badge badge-closed">Closed</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <small>
-                                <span class="text-success"><i class="bi bi-arrow-up"></i> {{ (session.bytes_sent / 1024 / 1024) | round(2) }} MB</span><br>
-                                <span class="text-info"><i class="bi bi-arrow-down"></i> {{ (session.bytes_received / 1024 / 1024) | round(2) }} MB</span>
-                            </small>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="9" class="text-center text-muted py-4">
-                            <i class="bi bi-inbox fs-1"></i>
-                            <p class="mt-2">No sessions found</p>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                    <!-- DataTables заполнит tbody через AJAX -->
                 </tbody>
             </table>
         </div>
         
-        <!-- Пагинация -->
-        {% if sessions.meta.total_pages > 1 %}
-        <nav aria-label="Page navigation">
-            <ul class="pagination justify-content-center">
-                {% if sessions.meta.page > 1 %}
-                <li class="page-item">
-                    <a class="page-link" href="/sessions?page={{ sessions.meta.page - 1 }}&per_page={{ sessions.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&status={{ status or '' }}&country={{ country or '' }}">
-                        <i class="bi bi-chevron-left"></i> Previous
-                    </a>
-                </li>
-                {% endif %}
-                
-                {% for p in range(1, sessions.meta.total_pages + 1) %}
-                    {% if p == sessions.meta.page %}
-                        <li class="page-item active"><span class="page-link">{{ p }}</span></li>
-                    {% elif p <= 3 or p > sessions.meta.total_pages - 3 or (p >= sessions.meta.page - 1 and p <= sessions.meta.page + 1) %}
-                        <li class="page-item">
-                            <a class="page-link" href="/sessions?page={{ p }}&per_page={{ sessions.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&status={{ status or '' }}&country={{ country or '' }}">{{ p }}</a>
-                        </li>
-                    {% elif p == 4 or p == sessions.meta.total_pages - 3 %}
-                        <li class="page-item disabled"><span class="page-link">...</span></li>
-                    {% endif %}
-                {% endfor %}
-                
-                {% if sessions.meta.page < sessions.meta.total_pages %}
-                <li class="page-item">
-                    <a class="page-link" href="/sessions?page={{ sessions.meta.page + 1 }}&per_page={{ sessions.meta.per_page }}&account={{ account or '' }}&source_ip={{ source_ip or '' }}&status={{ status or '' }}&country={{ country or '' }}">
-                        Next <i class="bi bi-chevron-right"></i>
-                    </a>
-                </li>
-                {% endif %}
-            </ul>
-        </nav>
-        {% endif %}
+        <!-- Пагинация управляется DataTables -->
+        <div id="paginationContainer"></div>
         
+        <!-- Информация о количестве записей -->
         <div class="text-center text-muted">
-            <small>Showing {{ ((sessions.meta.page - 1) * sessions.meta.per_page) + 1 }} - 
-                   {{ [sessions.meta.page * sessions.meta.per_page, sessions.meta.total] | min }} 
-                   of {{ sessions.meta.total }} sessions</small>
+            <small id="recordsInfo">Loading...</small>
         </div>
     </div>
 </div>
@@ -188,12 +93,156 @@
 
 {% block extra_js %}
 <script>
+    console.log('[Sessions] Script starting...');
+    console.log('[Sessions] jQuery version:', typeof $ !== 'undefined' ? $.fn.jquery : 'NOT LOADED');
+    console.log('[Sessions] DataTables available:', typeof $.fn.DataTable !== 'undefined');
+    
     $(document).ready(function() {
-        $('#sessionsTable').DataTable({
-            paging: false,
-            searching: false,
-            info: false,
-            order: [[2, 'desc']]
+        console.log('[Sessions] Document ready, initializing DataTables...');
+        
+        // Проверяем наличие jQuery и DataTables
+        if (typeof $ === 'undefined') {
+            console.error('[Sessions] jQuery NOT LOADED!');
+            return;
+        }
+        if (typeof $.fn.DataTable === 'undefined') {
+            console.error('[Sessions] DataTables NOT LOADED!');
+            return;
+        }
+        
+        // Получаем параметры фильтров из URL
+        var urlParams = new URLSearchParams(window.location.search);
+        var initialAccount = urlParams.get('account') || '';
+        var initialSourceIp = urlParams.get('source_ip') || '';
+        var initialStatus = urlParams.get('status') || '';
+        var initialCountry = urlParams.get('country') || '';
+        
+        console.log('[Sessions] Initial filters:', {
+            account: initialAccount,
+            source_ip: initialSourceIp,
+            status: initialStatus,
+            country: initialCountry
+        });
+        
+        // Инициализируем DataTables с серверной обработкой
+        var table = $('#sessionsTable').DataTable({
+            processing: true,
+            serverSide: true,
+            pageLength: 20,
+            lengthChange: true,
+            lengthMenu: [[10, 20, 50, 100], [10, 20, 50, 100]],
+            ajax: function(data, callback, settings) {
+                console.log('[Sessions] DataTables requesting data:', data);
+                
+                // Преобразуем параметры DataTables в параметры API
+                var page = Math.floor(data.start / data.length) + 1;
+                var per_page = data.length;
+                
+                var params = {
+                    page: page,
+                    per_page: per_page,
+                    account: initialAccount,
+                    source_ip: initialSourceIp,
+                    status: initialStatus,
+                    country: initialCountry
+                };
+                
+                // Параметры сортировки
+                if (data.order && data.order.length > 0) {
+                    params.order_col = data.order[0].column;
+                    params.order_dir = data.order[0].dir;
+                }
+                
+                console.log('[Sessions] Sending request with params:', params);
+                
+                $.ajax({
+                    url: '/api/v1/sessions',
+                    type: 'GET',
+                    xhrFields: { withCredentials: true },
+                    data: params,
+                    dataType: 'json',
+                    success: function(json) {
+                        console.log('[Sessions] API response:', json);
+                        
+                        // Преобразуем ответ API в формат DataTables
+                        var response = {
+                            draw: data.draw,
+                            recordsTotal: json.meta.total,
+                            recordsFiltered: json.meta.total,
+                            data: json.data || []
+                        };
+                        
+                        console.log('[Sessions] Transformed response:', response);
+                        callback(response);
+                    },
+                    error: function(xhr, error, thrown) {
+                        console.error('[Sessions] AJAX error:', error, thrown, xhr.status, xhr.responseText);
+                        if (xhr.status === 401) {
+                            window.location.href = '/login';
+                        }
+                    }
+                });
+            },
+            columns: [
+                { data: 'id', name: 'id', orderable: true },
+                { data: 'account_cn', name: 'account', orderable: true },
+                { data: 'connected_at', name: 'connected', orderable: true },
+                { data: 'duration_seconds', name: 'duration', orderable: false },
+                { data: 'source_ip', name: 'source_ip', orderable: true },
+                { data: 'geo.country', name: 'location', orderable: true, render: function(data, type, row) {
+                    var country = row.geo && row.geo.country ? row.geo.country : '';
+                    var city = row.geo && row.geo.city ? row.geo.city : '';
+                    if (country && city) {
+                        return country + ', ' + city;
+                    }
+                    return country || city || '-';
+                }},
+                { data: 'virtual_ip', name: 'virtual_ip', orderable: true },
+                { data: 'status', name: 'status', orderable: true, render: function(data, type, row) {
+                    if (data === 'active') {
+                        return '<span class="badge badge-active">Active</span>';
+                    } else {
+                        return '<span class="badge badge-closed">Closed</span>';
+                    }
+                }},
+                { data: 'bytes_sent', name: 'traffic', orderable: false, render: function(data, type, row) {
+                    var sent = (data / 1024 / 1024).toFixed(2);
+                    var received = (row.bytes_received / 1024 / 1024).toFixed(2);
+                    return '<small><span class="text-success"><i class="bi bi-arrow-up"></i> ' + sent + ' MB</span><br><span class="text-info"><i class="bi bi-arrow-down"></i> ' + received + ' MB</span></small>';
+                }}
+            ],
+            order: [[2, 'desc']],
+            language: {
+                search: 'Search:',
+                lengthMenu: 'Show _MENU_ entries',
+                info: 'Showing _START_ to _END_ of _TOTAL_ sessions',
+                infoEmpty: 'No sessions available',
+                infoFiltered: '(filtered from _MAX_ total sessions)',
+                paginate: {
+                    first: 'First',
+                    previous: 'Previous',
+                    next: 'Next',
+                    last: 'Last'
+                }
+            },
+            dom: '<"row"<"col-sm-12 col-md-6"l><"col-sm-12 col-md-6"f>><"row"<"col-sm-12"tr>><"row"<"col-sm-12 col-md-5"i><"col-sm-12 col-md-7"p>>'
+        });
+
+        // Обработчик кнопки фильтрации формы
+        $('#filterForm').on('submit', function(e) {
+            e.preventDefault();
+            console.log('[Sessions] Filter form submitted');
+            initialAccount = $('input[name="account"]').val();
+            initialSourceIp = $('input[name="source_ip"]').val();
+            initialStatus = $('select[name="status"]').val();
+            initialCountry = $('input[name="country"]').val();
+            console.log('[Sessions] New filters:', {
+                account: initialAccount,
+                source_ip: initialSourceIp,
+                status: initialStatus,
+                country: initialCountry
+            });
+            table.page(0).draw();
         });
     });
 </script>
