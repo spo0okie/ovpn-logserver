@@ -83,30 +83,26 @@ class TestMgmtClientInvariants:
     def test_m1_2_uses_env_variable(self):
         """
         M1.2: Путь к сокету может быть переопределен через переменную окружения.
-
-        Предотвращает: HARDCODED_PATH_TO_SOCKET
+        Перечитываем и collector.config, и collector.mgmt_client, т.к. путь
+        вычисляется на import-time в config.py.
         """
+        import importlib
+
+        from collector import config as collector_config
         from collector import mgmt_client
 
-        # Сохраняем оригинальное значение
-        original_path = mgmt_client.MGMT_SOCKET_PATH
+        original = mgmt_client.MGMT_SOCKET_PATH
+        test_path = "/test/socket/path.sock"
 
         try:
-            # Устанавливаем тестовое значение
-            test_path = "/test/socket/path.sock"
-            mgmt_client.MGMT_SOCKET_PATH = test_path
-            mgmt_client.MGMT_SOCKET_PATH = test_path  # Also update the env var
-
-            # Проверяем что путь изменился
             with patch.dict(os.environ, {"OPENVPN_MGMT_SOCKET": test_path}):
-                # Перезагружаем модуль чтобы применить изменения
-                import importlib
+                importlib.reload(collector_config)
                 importlib.reload(mgmt_client)
-                path = mgmt_client.get_mgmt_socket_path()
-                assert path == test_path
+                assert mgmt_client.get_mgmt_socket_path() == test_path
         finally:
-            # Восстанавливаем оригинальное значение
-            mgmt_client.MGMT_SOCKET_PATH = original_path
+            importlib.reload(collector_config)
+            importlib.reload(mgmt_client)
+            mgmt_client.MGMT_SOCKET_PATH = original
 
     def test_m1_3_returns_set(self):
         """
@@ -201,71 +197,70 @@ class TestParseClientsFromResponse:
         assert result == set()
 
     def test_parse_no_clients(self):
-        """
-        Парсинг ответа без клиентов возвращает пустое множество.
-        """
+        """Парсинг ответа без клиентов (status 3 — tab-separated)."""
         from collector.mgmt_client import parse_clients_from_response
 
-        response = "OpenVPN Management Interface\nVERSION,1\nEND"
+        response = (
+            "TITLE\tOpenVPN 2.5\n"
+            "TIME\tFri Jan 1 00:00:00 2026\t1735689600\n"
+            "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\n"
+            "GLOBAL_STATS\tMax bcast/mcast queue length\t0\n"
+            "END\n"
+        )
         result = parse_clients_from_response(response)
         assert result == set()
 
     def test_parse_single_client(self):
-        """
-        Парсинг ответа с одним клиентом.
-        """
+        """Один клиент в формате status 3."""
         from collector.mgmt_client import parse_clients_from_response
 
         response = (
-            "OpenVPN Management Interface\n"
-            "CLIENT_LIST,client1,10.8.0.2:12345,10.8.0.1,,\n"
-            "END"
+            "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\n"
+            "CLIENT_LIST\tclient1\t10.8.0.2:12345\t10.8.0.1\t\t\n"
+            "END\n"
         )
         result = parse_clients_from_response(response)
         assert result == {"client1"}
 
     def test_parse_multiple_clients(self):
-        """
-        Парсинг ответа с несколькими клиентами.
-        """
+        """Несколько клиентов."""
         from collector.mgmt_client import parse_clients_from_response
 
         response = (
-            "OpenVPN Management Interface\n"
-            "CLIENT_LIST,user1,10.8.0.2:12345,10.8.0.1,,\n"
-            "CLIENT_LIST,user2,10.8.0.3:12345,10.8.0.1,,\n"
-            "CLIENT_LIST,admin,10.8.0.4:12345,10.8.0.1,,\n"
-            "END"
+            "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\n"
+            "CLIENT_LIST\tuser1\t10.8.0.2:12345\t10.8.0.1\t\t\n"
+            "CLIENT_LIST\tuser2\t10.8.0.3:12345\t10.8.0.2\t\t\n"
+            "CLIENT_LIST\tadmin\t10.8.0.4:12345\t10.8.0.3\t\t\n"
+            "END\n"
         )
         result = parse_clients_from_response(response)
         assert result == {"user1", "user2", "admin"}
 
-    def test_parse_client_with_special_chars(self):
-        """
-        Парсинг клиентов с специальными символами в CN.
-        """
+    def test_parse_client_with_spaces_in_cn(self):
+        """CN с пробелами должен парситься целиком (split по \\t)."""
         from collector.mgmt_client import parse_clients_from_response
 
         response = (
-            "CLIENT_LIST,user@example.com,10.8.0.2:12345,10.8.0.1,,\n"
-            "CLIENT_LIST,user-with-dash,10.8.0.3:12345,10.8.0.1,,\n"
-            "END"
+            "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\tVirtual Address\n"
+            "CLIENT_LIST\tJohn Doe\t10.8.0.2:12345\t10.8.0.1\t\t\n"
+            "CLIENT_LIST\tuser@example.com\t10.8.0.3:12345\t10.8.0.2\t\t\n"
+            "END\n"
         )
         result = parse_clients_from_response(response)
-        assert result == {"user@example.com", "user-with-dash"}
+        assert result == {"John Doe", "user@example.com"}
 
     def test_parse_ignores_header_footer(self):
-        """
-        Парсинг игнорирует заголовки и завершающие строки.
-        """
+        """HEADER, GLOBAL_STATS, ROUTING_TABLE, END не должны попадать в результат."""
         from collector.mgmt_client import parse_clients_from_response
 
         response = (
-            "OpenVPN Management Interface\n"
-            "VERSION,1\n"
-            "CLIENT_LIST,client1,10.8.0.2:12345,10.8.0.1,,\n"
-            "GLOBAL_STATS,1\n"
-            "END"
+            "TITLE\tOpenVPN 2.5\n"
+            "HEADER\tCLIENT_LIST\tCommon Name\tReal Address\n"
+            "CLIENT_LIST\tclient1\t10.8.0.2:12345\t10.8.0.1\t\t\n"
+            "HEADER\tROUTING_TABLE\tVirtual Address\tCommon Name\n"
+            "ROUTING_TABLE\t10.8.0.2\tclient1\t10.8.0.2:12345\n"
+            "GLOBAL_STATS\tMax bcast/mcast queue length\t0\n"
+            "END\n"
         )
         result = parse_clients_from_response(response)
         assert result == {"client1"}

@@ -106,6 +106,13 @@ def list_accounts(
     # I7.4: Применяем фильтры
     if has_ccd is not None:
         query = query.having(func.max(Account.has_ccd) == has_ccd)
+    if is_revoked is not None:
+        # is_revoked=True  -> у пользователя есть хотя бы один отозванный сертификат
+        # is_revoked=False -> ни одного отозванного сертификата
+        if is_revoked:
+            query = query.having(func.max(Account.is_revoked) == True)
+        else:
+            query = query.having(func.max(Account.is_revoked) == False)
     if search:
         query = query.filter(Account.cn.ilike(f"%{search}%"))
 

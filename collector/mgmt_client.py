@@ -2,220 +2,170 @@
 """
 Модуль для работы с OpenVPN Management Interface.
 
-Предоставляет функциональность для получения списка активных клиентов
-через Management Interface сокета OpenVPN.
+Получает множество CN активных клиентов через unix-сокет.
 
 Инварианты:
-- M1.1: Создает модуль для работы с Management Interface
-- M1.2: Не зависит от конкретного пути сокета (читает из конфигурации)
-- M1.3: Возвращает Set[str] - множество CN активных клиентов
-- M1.4: При недоступности сокета возвращает пустое множество (graceful degradation)
+- M1.1: Самостоятельный модуль с тестами.
+- M1.2: Путь к сокету берётся из конфигурации (не захардкожен в функции).
+- M1.3: Возвращает Set[str] — CN активных клиентов.
+- M1.4: При ошибке сокета возвращает пустое множество.
+
+Реализация парсит ответ команды `status 3`, в которой поля разделены символом
+табуляции. Команда `quit` отправляется до закрытия сокета.
 """
 
-import os
-import sys
-import socket
 import logging
-from pathlib import Path
-from typing import Set, Optional
+import os
+import socket
+import sys
+from typing import Optional, Set
 
-# Добавляем родительскую директорию в путь для импорта config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from collector.config import OPENVPN_DIR, MGMT_SOCKET_PATH
 except ImportError:
-    # Fallback если config не загружен
     OPENVPN_DIR = os.getenv("OPENVPN_DIR", "/var/run/openvpn")
     MGMT_SOCKET_PATH = os.getenv(
         "OPENVPN_MGMT_SOCKET",
-        os.path.join(OPENVPN_DIR, "mgmt.sock")
+        os.path.join(OPENVPN_DIR, "mgmt.sock"),
     )
-
-# ============================================================================
-# Настройка логирования
-# ============================================================================
 
 logger = logging.getLogger(__name__)
 
+_RECV_TIMEOUT_SECONDS = 5.0
+_END_MARKERS = (b"\nEND\n", b"\nEND\r\n", b"\r\nEND\r\n")
+_SKIP_PREFIXES = (
+    "TITLE",
+    "TIME",
+    "HEADER",
+    "GLOBAL_STATS",
+    "ROUTING_TABLE",
+    "END",
+    ">",
+    "OpenVPN",
+)
+
 
 def get_mgmt_socket_path() -> str:
-    """
-    Возвращает путь к Management Interface сокету.
-    
-    Путь читается из конфигурации в следующем порядке приоритета:
-    1. Переменная окружения OPENVPN_MGMT_SOCKET
-    2. Файл config/openvpn.yaml (management_socket)
-    3. Значение по умолчанию: /var/run/openvpn/mgmt.sock
-    
-    Returns:
-        str: Путь к сокету из конфигурации
-    """
+    """Возвращает путь к Management Interface сокету (M1.2)."""
     return MGMT_SOCKET_PATH
 
 
 def get_connected_clients(mgmt_socket_path: Optional[str] = None) -> Set[str]:
-    """
-    Получает список Common Names активных клиентов из Management Interface.
-
-    Подключается к OpenVPN Management Interface и отправляет команду 'status 3'
-    для получения списка активных клиентов. Парсит ответ и возвращает множество
-    CN (Common Names) подключенных клиентов.
-
-    Invariant M1.3: Возвращает Set[str] - множество CN активных клиентов
-    Invariant M1.4: При недоступности сокета возвращает пустое множество
-
-    Args:
-        mgmt_socket_path: Опциональный путь к сокету.
-                         Если None, используется значение из конфигурации (M1.2).
-
-    Returns:
-        Set[str]: Множество CN активных клиентов.
-                  Пустое множество если сокет недоступен или нет клиентов.
-    """
-    # M1.2: Используем путь из конфигурации если не передан
+    """Возвращает множество CN активных клиентов (M1.3, M1.4)."""
     if mgmt_socket_path is None:
         mgmt_socket_path = get_mgmt_socket_path()
 
-    logger.debug(f"Connecting to Management Interface socket: {mgmt_socket_path}")
+    if not os.path.exists(mgmt_socket_path):
+        logger.error("Management Interface socket not found: %s", mgmt_socket_path)
+        return set()
 
+    sock = None
     try:
-        # Проверяем существование сокета
-        if not os.path.exists(mgmt_socket_path):
-            logger.error(f"Management Interface socket not found: {mgmt_socket_path}")
-            return set()
-        
-        logger.debug(f"Connecting to Management Interface socket: {mgmt_socket_path}")
-
-        # Подключаемся к Unix-сокету Management Interface
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(5.0)  # Таймаут 5 секунд
+        sock.settimeout(_RECV_TIMEOUT_SECONDS)
         sock.connect(mgmt_socket_path)
 
-        logger.debug(f"Successfully connected to Management Interface socket")
+        sock.sendall(b"status 3\n")
+        response = _recv_until_end(sock)
 
-        # Отправляем команду 'status 3' для получения списка клиентов
-        # 'status 3' возвращает список клиентов в формате CLIENT_LIST
-        sock.send(b"status 3\n")
+        try:
+            sock.sendall(b"quit\n")
+        except OSError:
+            pass
 
-        # Читаем ответ (небольшой буфер, достаточно для списка клиентов)
-        response = b""
-        while True:
-            try:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-                # Проверяем завершение ответа (обычно заканчивается END)
-                if b"END" in response:
-                    break
-            except socket.timeout:
-                logger.debug("Socket read timeout")
-                break
-
-        sock.close()
-
-        # Логируем полный ответ для отладки
-        logger.debug(f"MGMT raw response ({len(response)} bytes): {response}")
-
-        # Парсим ответ и извлекаем CN клиентов
-        clients = parse_clients_from_response(response.decode('utf-8', errors='ignore'))
-
-        logger.info(f"MGMT: Found {len(clients)} active clients")
-        if len(clients) > 0:
-            logger.debug(f"Active clients: {clients}")
-        else:
-            logger.warning(f"MGMT returned 0 clients - response preview: {response[:500]}")
-        
+        text = response.decode("utf-8", errors="ignore")
+        clients = parse_clients_from_response(text)
+        logger.info("MGMT: %d active clients", len(clients))
+        if clients:
+            logger.debug("Active clients: %s", clients)
         return clients
 
-    except (socket.error, OSError, IOError) as e:
-        # M1.4: Graceful degradation - возвращаем пустое множество
-        logger.error(f"Cannot connect to Management Interface at {mgmt_socket_path}: {e}")
+    except (socket.error, OSError, IOError) as exc:
+        logger.error("Cannot read from Management Interface at %s: %s", mgmt_socket_path, exc)
         return set()
-    except Exception as e:
-        # Любая другая ошибка также должна возвращать пустое множество
-        logger.error(f"Unexpected error getting connected clients from {mgmt_socket_path}: {e}")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Unexpected MGMT error: %s", exc)
         return set()
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def _recv_until_end(sock: socket.socket, max_bytes: int = 1024 * 1024) -> bytes:
+    """Читает из сокета до маркера '\\nEND\\n' или таймаута."""
+    buf = b""
+    while len(buf) < max_bytes:
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            logger.debug("MGMT recv timeout")
+            break
+        if not chunk:
+            break
+        buf += chunk
+        if any(marker in buf for marker in _END_MARKERS):
+            break
+    return buf
 
 
 def parse_clients_from_response(response: str) -> Set[str]:
     """
-    Парсит ответ Management Interface и извлекает Common Names клиентов.
+    Парсит ответ команды `status 3` (табуляция-разделённый).
 
-    Формат ответа команды 'status 3':
-    CLIENT_LIST<tab>Common Name<tab>Real Address<tab>...
-    или
-    CLIENT_LIST Common Name Real Address ...
-
-    Args:
-        response: Текстовый ответ от Management Interface
-
-    Returns:
-        Set[str]: Множество CN клиентов
+    Формат строки клиента:
+        CLIENT_LIST<TAB>Common Name<TAB>Real Address<TAB>...
+    Поскольку CN может содержать пробелы, разбиваем строго по `\\t`.
+    Заголовок `HEADER\\tCLIENT_LIST\\t...` пропускается.
     """
-    clients = set()
+    clients: Set[str] = set()
+    for raw_line in response.splitlines():
+        line = raw_line.strip("\r\n")
+        if not line:
+            continue
+        # Пропускаем строки, которые точно не содержат CLIENT_LIST.
+        if any(line.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        if "\t" not in line:
+            # Не tab-separated — нечего парсить (возможен `>INFO:` и т.п.).
+            continue
 
-    for line in response.splitlines():
-        # Ищем строки начинающиеся с "CLIENT_LIST" (с пробелом или табом)
-        # Формат: CLIENT_LIST<tab>CN<tab>Real Address<tab>...
-        stripped = line.lstrip()
-        if stripped.startswith("CLIENT_LIST"):
-            # Убираем префикс CLIENT_LIST и разбиваем по пробелам/табам
-            parts = stripped.split()
-            if len(parts) >= 2:
-                cn = parts[1]
-                if cn:  # Проверяем что CN не пустой
-                    clients.add(cn)
-
+        parts = line.split("\t")
+        if parts[0] != "CLIENT_LIST" or len(parts) < 2:
+            continue
+        cn = parts[1].strip()
+        if cn and cn != "Common Name":  # на всякий случай отсеять заголовок
+            clients.add(cn)
     return clients
 
 
 def get_connected_clients_count() -> int:
-    """
-    Возвращает количество активных клиентов.
-
-    Удобная функция для получения только количества клиентов.
-
-    Returns:
-        int: Количество активных клиентов
-    """
-    clients = get_connected_clients()
-    return len(clients)
+    return len(get_connected_clients())
 
 
 def is_client_connected(cn: str, mgmt_socket_path: Optional[str] = None) -> bool:
-    """
-    Проверяет, подключен ли конкретный клиент.
-
-    Args:
-        cn: Common Name клиента для проверки
-        mgmt_socket_path: Опциональный путь к сокету
-
-    Returns:
-        bool: True если клиент с данным CN активен
-    """
-    clients = get_connected_clients(mgmt_socket_path)
-    return cn in clients
+    return cn in get_connected_clients(mgmt_socket_path)
 
 
 def main():
-    """
-    Точка входа для тестирования модуля.
-
-    Выводит список активных клиентов в stdout.
-    """
     import json
 
     clients = get_connected_clients()
-    result = {
-        "socket_path": get_mgmt_socket_path(),
-        "client_count": len(clients),
-        "clients": sorted(list(clients))
-    }
+    print(
+        json.dumps(
+            {
+                "socket_path": get_mgmt_socket_path(),
+                "client_count": len(clients),
+                "clients": sorted(clients),
+            },
+            indent=2,
+        )
+    )
 
-    print(json.dumps(result, indent=2))
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

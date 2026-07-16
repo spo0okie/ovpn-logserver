@@ -391,19 +391,19 @@ class TestLoginFlow:
     """Тесты процесса входа/выхода."""
     
     def test_login_form_submission_success(self, client: TestClient):
-        """Успешная отправка формы логина."""
+        """Успешная отправка формы логина (creds зашиты в conftest через ENV)."""
         response = client.post(
             "/login",
-            data={"username": "admin", "password": "admin"},
+            data={"username": "admin", "password": "admin_password_123"},
             follow_redirects=False
         )
-        
+
         # Должно быть перенаправление на главную
         assert response.status_code in [302, 307]
         assert "/" in response.headers.get("location", "")
-        
-        # Должен быть установлен cookie
-        assert "auth" in response.cookies or "set-cookie" in str(response.headers).lower()
+
+        # Должен быть установлен session_id cookie
+        assert "session_id" in response.cookies or "set-cookie" in str(response.headers).lower()
     
     def test_login_form_submission_failure(self, client: TestClient):
         """Неудачная попытка входа."""

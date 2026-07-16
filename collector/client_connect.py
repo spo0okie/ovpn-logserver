@@ -37,6 +37,7 @@ from sqlalchemy.dialects.mysql import insert
 from core.database import SessionLocal, engine
 from core.models import Account, Session, Base
 from core.geoip import resolve_geoip
+from core.serial import normalize_serial
 
 # =============================================================================
 # Настройка логирования
@@ -97,12 +98,13 @@ def get_env_vars():
     """
     cn = os.environ.get('common_name')
     source_ip = os.environ.get('trusted_ip')
-    # Получаем серийный номер из переменной окружения OpenVPN
-    # tls_serial_0 содержит hex-строку серийного номера
-    serial_number = os.environ.get('tls_serial_0', 'unknown')
+    # tls_serial_0 — hex-строка без префикса; нормализуем к каноническому виду.
+    serial_number = normalize_serial(os.environ.get('tls_serial_0'))
 
-    logger.debug(f"Environment variables: common_name={cn}, trusted_ip={source_ip}, serial_number={serial_number}")
-    logger.debug(f"All env vars: {dict(os.environ)}")
+    logger.debug(
+        "Environment variables: common_name=%s, trusted_ip=%s, serial_number=%s",
+        cn, source_ip, serial_number,
+    )
 
     if not cn or not source_ip:
         logger.error(f"Missing required environment variables: common_name={cn}, trusted_ip={source_ip}")

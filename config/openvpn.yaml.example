@@ -1,0 +1,12 @@
+# Конфигурация OpenVPN для collector модулей.
+# Скопируйте в openvpn.yaml и при необходимости поправьте пути.
+# Переопределяется ENV: OPENVPN_BASE_DIR, OPENVPN_CERTS_DIR, OPENVPN_CERT_EXTENSION,
+#                       OPENVPN_CRL_FILE, OPENVPN_CCD_DIR, OPENVPN_MGMT_SOCKET
+
+openvpn:
+  base_dir: /etc/openvpn
+  certs_dir: /etc/openvpn/certs
+  cert_extension: .crt
+  crl_file: /etc/openvpn/crl.pem
+  ccd_dir: /etc/openvpn/ccd
+  management_socket: /var/run/openvpn/mgmt.sock

@@ -11,12 +11,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-# Настраиваем тестовую БД
+# Настраиваем тестовую БД и тестовые credentials ДО импорта web.main,
+# иначе load_auth_config закеширует значения из реального config/auth.yaml.
 os.environ["DATABASE_URL"] = "sqlite:///./test_web.db"
+os.environ.setdefault("WEB_AUTH_USERNAME", "admin")
+os.environ.setdefault("WEB_AUTH_PASSWORD", "admin_password_123")
 
-from core.database import Base, get_db
-from core.models import Account, Session as SessionModel, ConnectionAttempt
-from web.main import app
+from core.config import reload_config  # noqa: E402
+reload_config()
+
+from core.database import Base, get_db  # noqa: E402
+from core.models import Account, Session as SessionModel, ConnectionAttempt  # noqa: E402
+from web.main import app  # noqa: E402
 
 
 # Создаем тестовый engine

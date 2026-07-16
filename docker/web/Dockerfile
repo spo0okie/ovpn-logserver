@@ -1,12 +1,9 @@
 # =============================================================================
 # Dockerfile для Web приложения (FastAPI)
 # =============================================================================
-# Создает образ FastAPI приложения с Uvicorn сервером
-# =============================================================================
 
 FROM python:3.11-slim
 
-# Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     default-libmysqlclient-dev \
@@ -14,52 +11,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Создаем рабочую директорию
 WORKDIR /app
 
-# Создаем директории для приложения
-RUN mkdir -p /app/web /app/web/static /app/core /app/collector /app/database /app/sessions
+RUN mkdir -p /app/web /app/web/static /app/core /app/collector /app/database /app/sessions \
+    && touch /app/web/static/.keep
 
-# Создаем маркерный файл в static для git и Docker
-RUN touch /app/web/static/.keep
-
-# Копируем requirements (если есть) или устанавливаем напрямую
+# Зависимости устанавливаем из requirements.txt — детерминированно.
+COPY web/requirements.txt /tmp/web-requirements.txt
+COPY collector/requirements.txt /tmp/collector-requirements.txt
+COPY database/requirements.txt /tmp/database-requirements.txt
 RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn[standard] \
-    sqlalchemy \
-    pymysql \
-    cryptography \
-    python-jose[cryptography] \
-    passlib[bcrypt] \
-    python-multipart \
-    jinja2 \
-    aiofiles \
-    requests \
-    pyyaml \
-    tzlocal
+        -r /tmp/web-requirements.txt \
+        -r /tmp/collector-requirements.txt \
+        -r /tmp/database-requirements.txt \
+        aiofiles
 
-# Копируем код приложения
 COPY web/ /app/web/
 COPY core/ /app/core/
 COPY collector/ /app/collector/
 COPY database/ /app/database/
 COPY config/ /app/config/
 
-# Создаем пустой __init__.py если отсутствует
 RUN touch /app/__init__.py
 
-# Устанавливаем переменные окружения по умолчанию
+# entrypoint накатывает миграции и запускает uvicorn без --reload (это prod).
+COPY docker/web/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Открываем порт
 EXPOSE 8000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Запускаем приложение
-CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

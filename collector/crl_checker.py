@@ -24,6 +24,7 @@ from cryptography.x509.oid import NameOID
 
 from core.database import SessionLocal
 from core.models import Account
+from core.serial import normalize_serial
 from collector.config import CRL_FILE, CERTS_DIR, CERT_EXTENSION
 
 # =============================================================================
@@ -92,14 +93,15 @@ def parse_crl(crl_path: str) -> dict:
         # Парсим CRL
         crl = x509.load_pem_x509_crl(crl_data, default_backend())
 
-        # Собираем информацию об отозванных сертификатах
+        # Собираем информацию об отозванных сертификатах (нормализованный hex)
         revoked_certs = {}
         for revoked_cert in crl:
-            serial = str(revoked_cert.serial_number)
-            # Берем дату отзыва если есть, иначе текущее время
+            serial = normalize_serial(revoked_cert.serial_number)
             revoked_at = revoked_cert.revocation_date_utc
             if revoked_at is None:
                 revoked_at = datetime.utcnow()
+            else:
+                revoked_at = revoked_at.replace(tzinfo=None)
             revoked_certs[serial] = revoked_at
 
         logger.info(f"CRL parsed: {len(revoked_certs)} revoked certificates")
@@ -140,7 +142,7 @@ def extract_cert_info(cert_path: str) -> dict:
 
         return {
             'cn': cn,
-            'serial_number': str(cert.serial_number)
+            'serial_number': normalize_serial(cert.serial_number)
         }
     except Exception as e:
         logger.debug(f"Error extracting cert info from {cert_path}: {e}")
@@ -250,12 +252,11 @@ def check_crl(db=None, crl_path: str = None, certs_dir: str = None) -> dict:
             stats['checked'] += 1
 
             # I6.2: Проверяем отозван ли сертификат
-            # Теперь serial_number хранится прямо в account
-            serial = account.serial_number
+            serial = normalize_serial(account.serial_number)
 
             # Пропускаем legacy записи без серийного номера
-            if serial.startswith('legacy_'):
-                logger.debug(f"Skipping legacy account: CN='{account.cn}', serial='{serial}'")
+            if serial.startswith("legacy_") or serial == "unknown":
+                logger.debug(f"Skipping account without real serial: CN='{account.cn}', serial='{serial}'")
                 continue
 
             is_revoked = serial in revoked_serials

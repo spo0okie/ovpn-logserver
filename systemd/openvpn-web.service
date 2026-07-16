@@ -15,9 +15,10 @@ Environment=PYTHONPATH=/opt/openvpn-logserver
 # Пароль БД больше не требуется в переменных окружения - читается из config/database.yaml
 Environment=LOG_LEVEL=INFO
 
-# Запуск напрямую через uvicorn (без venv)
+# Запуск напрямую через uvicorn (без venv).
+# 127.0.0.1: приложение не имеет TLS, наружу — только через reverse proxy.
 ExecStart=uvicorn web.main:app \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 8000 \
     --workers 2
 

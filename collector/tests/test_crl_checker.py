@@ -184,9 +184,11 @@ class TestI62CrlUpdatesRevocation:
         # Создаем пустой CRL (без отозванных)
         crl_path = create_test_crl({}, tmp_path)
         
-        # Создаем account помеченный как отозванный
+        # Создаем account помеченный как отозванный (serial_number обязателен —
+        # crl_checker пропускает записи с serial='unknown')
         account = Account(
             cn='restored_client',
+            serial_number=str(serial),
             is_revoked=True,
             revoked_at=now - timedelta(days=7)
         )

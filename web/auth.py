@@ -1,258 +1,185 @@
 """
-Аутентификация для API - Session-based Auth.
+Аутентификация для Web/API.
 
-Реализует I7.6: Аутентификация обязательна для всех endpoints.
-Учетные данные читаются из config/auth.yaml.
 Поддерживает:
-- Session ID из cookie для веб-интерфейса
-- Authorization заголовок для backward compatibility и AJAX запросов
+- Session ID из cookie (для веб-интерфейса).
+- Authorization Basic из заголовка (для AJAX/curl).
+
+Пароль хранится в config/auth.yaml как bcrypt-хеш (`password_hash`).
+Plaintext-поле `password` поддерживается как legacy с deprecation warning.
 """
 
+import json
 import logging
+import os
 import secrets
 import uuid
-import os
-import json
 from datetime import datetime, timezone
-from typing import Optional, Dict
+from typing import Optional
 
-from fastapi import HTTPException, status, Request
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import HTTPException, Request, status
 
-# Импортируем централизованную конфигурацию
 from core.config import get_web_auth_credentials
 
-# Настраиваем логирование
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# File-based Session Storage
+# Файловое хранилище сессий
 # =============================================================================
-# Хранилище сессий в файлах: sessions/{session_id}.json
-# Каждый файл содержит: {'username': str, 'created_at': iso_string, 'last_used': iso_string}
 SESSION_DIR = os.path.join(os.path.dirname(__file__), "..", "sessions")
 SESSION_LIFETIME_SECONDS = 3600
 
-# Убедимся, что директория для сессий существует
 os.makedirs(SESSION_DIR, exist_ok=True)
 
 
 def create_session(username: str) -> str:
-    """
-    Создает новую сессию для пользователя.
-    
-    Args:
-        username: Имя пользователя
-        
-    Returns:
-        str: Уникальный session_id
-    """
     session_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
-    
-    session_data = {
-        'username': username,
-        'created_at': now.isoformat(),
-        'last_used': now.isoformat()
-    }
-    
-    # Сохраняем сессию в файл
+    now = datetime.now(timezone.utc).isoformat()
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
-    with open(session_file, 'w') as f:
-        json.dump(session_data, f)
-    
-    logger.debug(f"[AUTH] Создана новая сессия: session_id={session_id}, username={username}")
-    
+    with open(session_file, "w") as f:
+        json.dump({"username": username, "created_at": now, "last_used": now}, f)
     return session_id
 
 
 def validate_session(session_id: str) -> Optional[str]:
-    """
-    Проверяет валидность сессии и возвращает username.
-    
-    Args:
-        session_id: ID сессии из cookie
-        
-    Returns:
-        str: Имя пользователя если сессия валидна, None если нет
-    """
     if not session_id:
-        logger.debug(f"[AUTH] validate_session: session_id пуст")
         return None
-    
-    # Читаем сессию из файла
+
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
     if not os.path.exists(session_file):
-        logger.debug(f"[AUTH] validate_session: session_id={session_id} не найден в файловом хранилище")
         return None
-    
+
     try:
-        with open(session_file, 'r') as f:
-            session_data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        logger.debug(f"[AUTH] validate_session: ошибка чтения сессии {session_id}: {e}")
-        # Удаляем поврежденный файл
+        with open(session_file, "r") as f:
+            data = json.load(f)
+        last_used = datetime.fromisoformat(data["last_used"])
+    except (json.JSONDecodeError, IOError, KeyError, ValueError) as exc:
+        logger.debug("[AUTH] поврежденный файл сессии %s: %s", session_id, exc)
         try:
             os.remove(session_file)
         except OSError:
             pass
         return None
-    
-    # Проверяем время жизни сессии
-    now = datetime.now(timezone.utc)
-    try:
-        last_used = datetime.fromisoformat(session_data['last_used'])
-    except (ValueError, KeyError):
-        logger.debug(f"[AUTH] validate_session: неверный формат времени в сессии {session_id}")
-        # Удаляем поврежденный файл
-        try:
-            os.remove(session_file)
-        except OSError:
-            pass
-        return None
-    
-    # Проверяем не истекла ли сессия
-    elapsed = (now - last_used).total_seconds()
+
+    elapsed = (datetime.now(timezone.utc) - last_used).total_seconds()
     if elapsed > SESSION_LIFETIME_SECONDS:
-        # Удаляем просроченную сессию
-        logger.debug(f"[AUTH] validate_session: session_id={session_id} истекла (прошло {elapsed}с)")
         try:
             os.remove(session_file)
         except OSError:
             pass
         return None
-    
-    # Обновляем время последнего использования
-    session_data['last_used'] = now.isoformat()
+
+    data["last_used"] = datetime.now(timezone.utc).isoformat()
     try:
-        with open(session_file, 'w') as f:
-            json.dump(session_data, f)
-    except IOError as e:
-        logger.debug(f"[AUTH] validate_session: ошибка обновления сессии {session_id}: {e}")
-    
-    logger.debug(f"[AUTH] validate_session: session_id={session_id} валидна, username={session_data['username']}")
-    return session_data['username']
+        with open(session_file, "w") as f:
+            json.dump(data, f)
+    except IOError as exc:
+        logger.debug("[AUTH] ошибка обновления сессии %s: %s", session_id, exc)
+
+    return data["username"]
 
 
 def delete_session(session_id: str) -> bool:
-    """
-    Удаляет сессию (логаут).
-    
-    Args:
-        session_id: ID сессии для удаления
-        
-    Returns:
-        bool: True если сессия была удалена, False если не существовала
-    """
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
-    if os.path.exists(session_file):
-        try:
-            os.remove(session_file)
-            return True
-        except OSError as e:
-            logger.debug(f"[AUTH] delete_session: ошибка удаления файла сессии {session_id}: {e}")
-            return False
-    return False
+    if not os.path.exists(session_file):
+        return False
+    try:
+        os.remove(session_file)
+        return True
+    except OSError as exc:
+        logger.debug("[AUTH] ошибка удаления сессии %s: %s", session_id, exc)
+        return False
 
 
 def cleanup_expired_sessions() -> int:
-    """
-    Очищает все просроченные сессии.
-    
-    Returns:
-        int: Количество удаленных сессий
-    """
     now = datetime.now(timezone.utc)
-    expired_count = 0
-    
-    # Проверяем все файлы сессий в директории
+    expired = 0
     try:
-        for filename in os.listdir(SESSION_DIR):
-            if filename.endswith(".json"):
-                session_id = filename[:-5]  # Убираем .json
-                session_file = os.path.join(SESSION_DIR, filename)
-                
-                try:
-                    with open(session_file, 'r') as f:
-                        session_data = json.load(f)
-                    
-                    last_used = datetime.fromisoformat(session_data['last_used'])
-                    elapsed = (now - last_used).total_seconds()
-                    
-                    if elapsed > SESSION_LIFETIME_SECONDS:
-                        # Удаляем просроченную сессию
-                        os.remove(session_file)
-                        expired_count += 1
-                        
-                except (json.JSONDecodeError, IOError, KeyError, ValueError) as e:
-                    logger.debug(f"[AUTH] cleanup_expired_sessions: ошибка обработки {session_file}: {e}")
-                    # Удаляем поврежденный файл
-                    try:
-                        os.remove(session_file)
-                        expired_count += 1
-                    except OSError:
-                        pass
-                        
-    except OSError as e:
-        logger.debug(f"[AUTH] cleanup_expired_sessions: ошибка доступа к директории {SESSION_DIR}: {e}")
-    
-    return expired_count
+        names = os.listdir(SESSION_DIR)
+    except OSError:
+        return 0
+
+    for filename in names:
+        if not filename.endswith(".json"):
+            continue
+        path = os.path.join(SESSION_DIR, filename)
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            last_used = datetime.fromisoformat(data["last_used"])
+            if (now - last_used).total_seconds() > SESSION_LIFETIME_SECONDS:
+                os.remove(path)
+                expired += 1
+        except (json.JSONDecodeError, IOError, KeyError, ValueError):
+            try:
+                os.remove(path)
+                expired += 1
+            except OSError:
+                pass
+    return expired
 
 
-# HTTPBasic для FastAPI (backward compatibility)
-db_security = HTTPBasic(auto_error=False)
+# =============================================================================
+# Проверка пароля
+# =============================================================================
+
+_warned_plaintext_password = False
 
 
-def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPBasicCredentials] = None
-) -> str:
+def _verify_password(provided: str, stored_hash: Optional[str], stored_plain: Optional[str]) -> bool:
+    """Сравнивает пароль с bcrypt-хешем (приоритет) или plaintext (legacy)."""
+    if stored_hash:
+        try:
+            from passlib.hash import bcrypt
+            return bcrypt.verify(provided, stored_hash)
+        except (ValueError, TypeError):
+            return False
+
+    if stored_plain is not None:
+        global _warned_plaintext_password
+        if not _warned_plaintext_password:
+            logger.warning(
+                "[AUTH] Plain-text password в config/auth.yaml небезопасен. "
+                "Замените на password_hash (bcrypt)."
+            )
+            _warned_plaintext_password = True
+        return secrets.compare_digest(provided, stored_plain)
+
+    return False
+
+
+def verify_credentials(username: str, password: str) -> bool:
+    """Проверяет username/password по конфигу. Используется login и Basic Auth."""
+    cfg = get_web_auth_credentials()
+    if not secrets.compare_digest(username, cfg["username"] or ""):
+        return False
+    return _verify_password(password, cfg.get("password_hash"), cfg.get("password"))
+
+
+# =============================================================================
+# Зависимость FastAPI
+# =============================================================================
+
+
+def get_current_user(request: Request) -> str:
     """
-    Проверяет аутентификацию пользователя.
-    
-    I7.6: Аутентификация обязательна для всех endpoints.
-    Учетные данные читаются из config/auth.yaml.
-    
-    Поддерживает:
-    1. Session ID из cookie (session_id) - для веб-интерфейса
-    2. Authorization заголовок - для backward compatibility и AJAX запросов
-    
-    Args:
-        request: HTTP запрос
-        credentials: Basic Auth credentials (опционально)
-    
-    Returns:
-        str: Имя пользователя при успешной аутентификации
-    
-    Raises:
-        HTTPException: 401 если аутентификация не пройдена
+    Аутентифицирует запрос. Приоритет:
+    1) session_id cookie (создаётся при логине через /login),
+    2) Authorization: Basic ... (для curl/API-клиентов).
     """
     import base64
-    
-    logger.debug(f"[AUTH] get_current_user: проверка аутентификации")
-    logger.debug(f"[AUTH] Cookies: {list(request.cookies.keys())}")
-    logger.debug(f"[AUTH] Cookie values: {dict(request.cookies)}")
-    logger.debug(f"[AUTH] Headers: {dict(request.headers)}")
-    
-    # Приоритет 1: Session ID из cookie
+
     session_id = request.cookies.get("session_id")
-    logger.debug(f"[AUTH] session_id из cookie: {session_id}")
-    logger.debug(f"[AUTH] Тип session_id: {type(session_id)}, длина: {len(session_id) if session_id else 0}")
     if session_id:
         username = validate_session(session_id)
         if username:
-            logger.debug(f"[AUTH] Аутентификация успешна через session_id, username={username}")
             return username
-        logger.debug(f"[AUTH] session_id не валиден")
-    
-    # Приоритет 2: Authorization заголовок (backward compatibility)
+
     auth_header = request.headers.get("Authorization", "")
-    
     if auth_header.startswith("Basic "):
         try:
-            encoded = auth_header[6:]  # Пропускаем "Basic "
-            decoded = base64.b64decode(encoded).decode("utf-8")
+            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             username, password = decoded.split(":", 1)
         except Exception:
             raise HTTPException(
@@ -260,52 +187,12 @@ def get_current_user(
                 detail="Invalid credentials format",
                 headers={"WWW-Authenticate": "Basic"},
             )
-    
-    # Приоритет 3: Old auth cookie (backward compatibility)
-    else:
-        auth_cookie = request.cookies.get("auth", "")
-        if not auth_cookie:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required",
-                headers={"WWW-Authenticate": "Basic"},
-            )
-        
-        try:
-            # Cookie содержит base64-encoded credentials
-            decoded = base64.b64decode(auth_cookie).decode("utf-8")
-            username, password = decoded.split(":", 1)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid cookie format",
-                headers={"WWW-Authenticate": "Basic"},
-            )
+        if verify_credentials(username, password):
+            return username
+        logger.warning("[AUTH] Basic auth failed for user=%s", username)
 
-    # Получаем учетные данные из конфигурации
-    auth_config = get_web_auth_credentials()
-    valid_username = auth_config.get("username", "admin")
-    valid_password = auth_config.get("password", "admin_password_123")
-
-    logger.debug(f"[AUTH] Проверка учетных данных: username={username}, valid_username={valid_username}")
-
-    # Проверяем username (константное время для предотвращения timing attacks)
-    if not secrets.compare_digest(username, valid_username):
-        logger.warning(f"[AUTH] Неверное имя пользователя: {username}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    # Проверяем password (константное время для предотвращения timing attacks)
-    if not secrets.compare_digest(password, valid_password):
-        logger.warning(f"[AUTH] Неверный пароль для пользователя: {username}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    logger.info(f"[AUTH] Успешная аутентификация: username={username}")
-    return username
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Basic"},
+    )

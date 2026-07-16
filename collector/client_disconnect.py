@@ -95,8 +95,7 @@ def get_env_vars():
     """
     cn = os.environ.get('common_name')
 
-    logger.debug(f"Environment variables: common_name={cn}")
-    logger.debug(f"All env vars: {dict(os.environ)}")
+    logger.debug("Environment variables: common_name=%s", cn)
 
     if not cn:
         logger.error(f"Missing required environment variable: common_name={cn}")

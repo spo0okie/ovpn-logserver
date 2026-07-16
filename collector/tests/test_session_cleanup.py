@@ -332,8 +332,13 @@ class TestCleanupOrphanedSessionsIdempotency:
 
         disconnected_before = None
 
+        # Передаём непустое множество с другим CN — наш CN orphaned.
+        # Пустое множество интерпретируется как «mgmt вернул 0 клиентов» и
+        # триггерит fail-closed (см. session_cleanup C1.7).
+        connected = {"someone_else"}
+
         # Первый запуск
-        orphaned1, marked1 = cleanup_orphaned_sessions(db, set())
+        orphaned1, marked1 = cleanup_orphaned_sessions(db, connected)
         db.refresh(session)
 
         assert marked1 == 1
@@ -341,7 +346,7 @@ class TestCleanupOrphanedSessionsIdempotency:
         disconnected_before = session.disconnected_at
 
         # Второй запуск - сессия уже помечена, не должна измениться
-        orphaned2, marked2 = cleanup_orphaned_sessions(db, set())
+        orphaned2, marked2 = cleanup_orphaned_sessions(db, connected)
 
         db.refresh(session)
 

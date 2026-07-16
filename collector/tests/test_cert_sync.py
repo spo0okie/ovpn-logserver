@@ -528,8 +528,10 @@ class TestHelperFunctions:
     def test_parse_crl_valid(self, tmp_path):
         """
         Тест parse_crl с валидным CRL файлом.
+        Серийные номера в результате — нормализованные (hex uppercase).
         """
-        # Создаем CRL с отозванными сертификатами
+        from core.serial import normalize_serial
+
         serial1 = 11111
         serial2 = 22222
         crl_path = create_test_crl(tmp_path, revoked_serials=[serial1, serial2])
@@ -537,8 +539,8 @@ class TestHelperFunctions:
         revoked = parse_crl(crl_path)
 
         assert len(revoked) == 2
-        assert str(serial1) in revoked
-        assert str(serial2) in revoked
+        assert normalize_serial(serial1) in revoked
+        assert normalize_serial(serial2) in revoked
 
     def test_parse_crl_empty(self, tmp_path):
         """

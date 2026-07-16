@@ -1,0 +1,26 @@
+# Конфигурация Web приложения OpenVPN LogServer
+# Скопируйте в web.yaml и установите свои значения.
+
+app:
+  host: 127.0.0.1
+  port: 8000
+  workers: 2
+  # Сгенерировать: python -c "import secrets; print(secrets.token_urlsafe(48))"
+  secret_key: "REPLACE_ME_WITH_RANDOM_SECRET_AT_LEAST_32_CHARS"
+  debug: false
+
+logging:
+  level: INFO
+  file: /opt/openvpn-logserver/logs/web.log
+  max_bytes: 10485760
+  backup_count: 5
+
+pagination:
+  default_page_size: 25
+  max_page_size: 100
+
+# CORS жёстко ограничен. Не использовать ["*"] вместе с credentials.
+cors:
+  allow_origins: []
+  allow_methods: ["GET", "POST"]
+  allow_headers: ["*"]

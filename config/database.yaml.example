@@ -1,0 +1,24 @@
+# Конфигурация базы данных OpenVPN LogServer
+# Скопируйте в database.yaml и установите свои значения.
+# Все поля можно переопределить через переменные окружения:
+#   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_UNIX_SOCKET,
+#   DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT, DB_POOL_RECYCLE, DB_CHARSET
+
+database:
+  host: localhost
+  port: 3306
+  name: openvpn_logs
+  user: openvpn_user
+  password: REPLACE_ME
+
+  # Подключение через unix-сокет вместо TCP. Обязательно, если на сервере MySQL
+  # включён require_secure_transport=ON: локальный TCP без TLS отвергается,
+  # а сокет считается secure transport. host/port при этом игнорируются.
+  # unix_socket: /var/run/mysqld/mysqld.sock
+
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  pool_recycle: 3600
+
+  charset: utf8mb4

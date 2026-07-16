@@ -1,0 +1,11 @@
+# Конфигурация аутентификации OpenVPN LogServer
+# Скопируйте в auth.yaml и установите свои значения.
+# auth.yaml в git не коммитится (см. .gitignore).
+
+auth:
+  web:
+    # Имя пользователя для Basic Auth.
+    username: admin
+    # bcrypt-хеш пароля. Сгенерировать:
+    #   python -c "from passlib.hash import bcrypt; print(bcrypt.hash('your_password'))"
+    password_hash: "$2b$12$REPLACE_ME_WITH_BCRYPT_HASH"

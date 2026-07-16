@@ -3,65 +3,57 @@
 Скрипт для обнаружения и очистки orphaned-сессий OpenVPN.
 
 Сравнивает активные сессии в БД со списком клиентов из Management Interface.
-Сессии, CN которых отсутствуют в Management Interface, помечаются как 'error'.
+Сессии, CN которых отсутствуют в Management Interface, помечаются status='error'.
+
+Корректность под race с client-connect обеспечивается snapshot_time: помечаются
+только те сессии, которые существовали ДО снятия снимка mgmt — свежесозданные
+сессии (например, при reconnect) не трогаются.
 
 Инварианты:
-- C1.1: Находит все сессии status='active'
-- C1.2: Для каждой активной сессии проверяет наличие CN в Management Interface
-- C1.3: Сессия помечается как status='error' если CN отсутствует в mgmt
-- C1.4: Устанавливает disconnected_at = NOW() для orphaned сессий
-- C1.5: Логирует каждую orphaned сессию с CN и session_id
-- C1.6: Функция cleanup_orphaned_sessions() идемпотентна
+- C1.1: Находит все сессии status='active' (с connected_at < snapshot_time).
+- C1.2: Для каждой активной сессии проверяет наличие CN в Management Interface.
+- C1.3: Сессия помечается как status='error' если CN отсутствует в mgmt.
+- C1.4: Устанавливает disconnected_at = snapshot_time для orphaned сессий.
+- C1.5: Логирует каждую orphaned сессию с CN и session_id.
+- C1.6: Функция cleanup_orphaned_sessions() идемпотентна.
+- C1.7: Fail-closed при недоступном mgmt и при пустом ответе mgmt с
+        непустым списком active.
 """
 
+import logging
 import os
 import sys
-import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Set, List, Tuple
+from typing import List, Optional, Set, Tuple
 
-# Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
-
-from core.database import SessionLocal, engine
-from core.models import Session, Account
+from core.database import SessionLocal  # noqa: E402
+from core.models import Session  # noqa: E402
 
 # ============================================================================
-# Настройка логирования
+# Логирование
 # ============================================================================
 
-# Создаем директорию для логов если её нет
 LOG_DIR = Path("/var/log/openvpn-logserver")
 if not LOG_DIR.exists():
-    # Fallback для тестов - используем текущую директорию
     LOG_DIR = Path(__file__).parent.parent / "logs"
     LOG_DIR.mkdir(exist_ok=True)
-
 LOG_FILE = LOG_DIR / "session-cleanup.log"
 
-# Настройка логирования
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-# Форматтер для логов
-formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# Обработчик для записи в файл
 try:
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-except (PermissionError, OSError) as e:
-    print(f"Warning: Cannot write to log file {LOG_FILE}: {e}", file=sys.stderr)
+except (PermissionError, OSError) as exc:
+    print(f"Warning: cannot write to log file {LOG_FILE}: {exc}", file=sys.stderr)
 
-# Обработчик для вывода в stderr
 stderr_handler = logging.StreamHandler(sys.stderr)
 stderr_handler.setLevel(logging.INFO)
 stderr_handler.setFormatter(formatter)
@@ -69,189 +61,146 @@ logger.addHandler(stderr_handler)
 
 
 # ============================================================================
-# Функции скрипта
+# Логика
 # ============================================================================
 
-def get_active_sessions(db) -> List[Session]:
+
+def get_active_sessions(db, before: Optional[datetime] = None) -> List[Session]:
     """
-    Возвращает все сессии со статусом 'active'.
-
-    Invariant C1.1: Находит все сессии status='active'
-
-    Args:
-        db: сессия базы данных
-
-    Returns:
-        List[Session]: Список активных сессий
+    Возвращает все сессии status='active'.
+    Если задан `before` — только те, что существовали до этого момента (C1.1).
     """
-    return db.query(Session).filter(Session.status == 'active').all()
+    query = db.query(Session).filter(Session.status == "active")
+    if before is not None:
+        query = query.filter(Session.connected_at < before)
+    return query.all()
 
 
-def get_orphaned_sessions(active_sessions: List[Session], connected_cns: Set[str]) -> List[Session]:
-    """
-    Определяет orphaned сессии - те, CN которых нет в Management Interface.
-
-    Invariant C1.2: Для каждой активной сессии проверяет наличие CN в mgmt
-
-    Args:
-        active_sessions: Список активных сессий
-        connected_cns: Множество CN клиентов из Management Interface
-
-    Returns:
-        List[Session]: Список orphaned сессий
-    """
+def get_orphaned_sessions(
+    active_sessions: List[Session], connected_cns: Set[str]
+) -> List[Session]:
+    """Сессии без CN в connected_cns (C1.2)."""
     orphaned = []
     for session in active_sessions:
-        # Получаем CN из связанного аккаунта
         if session.account and session.account.cn:
-            cn = session.account.cn
-            # C1.2: Проверяем наличие CN в Management Interface
-            if cn not in connected_cns:
+            if session.account.cn not in connected_cns:
                 orphaned.append(session)
         else:
-            # Если аккаунт не найден, сессия считается orphaned
             logger.warning(
-                f"Session {session.id} has no associated account, "
-                f"marking as orphaned"
+                "Session %s has no associated account, marking as orphaned",
+                session.id,
             )
             orphaned.append(session)
-
     return orphaned
 
 
-def mark_session_as_orphaned(db, session: Session) -> None:
+def cleanup_orphaned_sessions(
+    db, connected_cns: Optional[Set[str]] = None
+) -> Tuple[int, int]:
     """
-    Помечает сессию как orphaned: устанавливает status='error' и disconnected_at.
+    Помечает orphaned active-сессии как error.
 
-    Invariant C1.3: Сессия помечается как status='error' если CN отсутствует
-    Invariant C1.4: Устанавливает disconnected_at = NOW()
-
-    Args:
-        db: сессия базы данных
-        session: Сессия для пометки
-    """
-    cn = session.account.cn if session.account else "unknown"
-
-    # C1.3: Устанавливаем статус 'error'
-    session.status = 'error'
-
-    # C1.4: Устанавливаем время отключения
-    session.disconnected_at = datetime.utcnow()
-
-    db.commit()
-
-    # C1.5: Логируем orphaned сессию
-    logger.info(
-        f"Orphaned session marked as error: "
-        f"session_id={session.id}, cn='{cn}', "
-        f"connected_at={session.connected_at}, "
-        f"disconnected_at={session.disconnected_at}"
-    )
-
-
-def cleanup_orphaned_sessions(db, connected_cns: Set[str] = None) -> Tuple[int, int]:
-    """
-    Выполняет очистку orphaned сессий.
-
-    Сравнивает активные сессии в БД со списком клиентов из Management Interface.
-    Сессии, CN которых отсутствуют в Management Interface, помечаются как 'error'.
-
-    Invariant C1.6: Функция идемпотентна (повторный запуск не меняет уже закрытые сессии)
-
-    Args:
-        db: сессия базы данных
-        connected_cns: Опционально - множество CN из Management Interface.
-                      Если None, запрашивает через mgmt_client.
-
-    Returns:
-        Tuple[int, int]: (количество найденных orphaned сессий, количество помеченных)
+    Возвращает (orphaned_count, marked_count).
+    Идемпотентна (C1.6): повторный запуск не меняет уже закрытые сессии.
     """
     logger.info("Starting orphaned session cleanup")
 
-    # C1.1: Получаем все активные сессии
-    active_sessions = get_active_sessions(db)
-    active_count = len(active_sessions)
-    logger.info(f"Found {active_count} active sessions")
+    snapshot_time = datetime.utcnow()
 
-    # Если нет активных сессий, ничего не делаем
-    if active_count == 0:
-        logger.info("No active sessions to process")
-        return 0, 0
-
-    # Получаем список CN из Management Interface если не передан
     if connected_cns is None:
         try:
             from collector.mgmt_client import get_connected_clients
             connected_cns = get_connected_clients()
-            mgmt_count = len(connected_cns)
-            logger.info(f"MGMT interface returned {mgmt_count} connected clients")
-            
-            if mgmt_count == 0:
-                logger.error("MGMT interface returned 0 clients - ALL active sessions will be marked as orphaned!")
-        except Exception as e:
-            logger.error(f"Failed to get connected clients from mgmt: {e}")
-            # ПРИ НЕУДАЧЕ НЕ помечаем все сессии как orphaned!
-            # Если mgmt недоступен, пропускаем cleanup для предотвращения ложных срабатываний
-            logger.warning("Skipping orphaned session cleanup - mgmt interface unavailable")
-            return active_count, 0
+        except Exception as exc:
+            logger.error("Failed to query mgmt: %s — skipping cleanup", exc)
+            return 0, 0
 
-    logger.info(f"Found {len(connected_cns)} connected clients in mgmt interface")
+    # C1.1: активные сессии до snapshot_time, чтобы не зацепить свежий reconnect.
+    active_sessions = get_active_sessions(db, before=snapshot_time)
+    active_count = len(active_sessions)
+    logger.info(
+        "Active sessions before snapshot: %d, mgmt connected: %d",
+        active_count,
+        len(connected_cns),
+    )
 
-    # C1.2: Определяем orphaned сессии
+    if active_count == 0:
+        return 0, 0
+
+    # C1.7: fail-closed — если mgmt вернул 0 клиентов при непустом active,
+    # высока вероятность, что сокет временно перезапущен/недоступен; не
+    # трогаем сессии, чтобы не выставить error пачкой.
+    if len(connected_cns) == 0:
+        logger.warning(
+            "MGMT returned 0 clients while %d active sessions exist — skipping cleanup",
+            active_count,
+        )
+        return 0, 0
+
     orphaned_sessions = get_orphaned_sessions(active_sessions, connected_cns)
     orphaned_count = len(orphaned_sessions)
 
-    logger.info(f"Found {orphaned_count} orphaned sessions")
-
-    # C1.3-C1.5: Помечаем orphaned сессии
     marked_count = 0
     for session in orphaned_sessions:
-        # C1.6: Идемпотентность - пропускаем если уже помечен как error
-        if session.status == 'error':
-            logger.debug(
-                f"Session {session.id} already marked as error, skipping"
-            )
+        if session.status == "error":
             continue
-
-        mark_session_as_orphaned(db, session)
+        cn = session.account.cn if session.account else "unknown"
+        session.status = "error"
+        session.disconnected_at = snapshot_time
         marked_count += 1
+        logger.info(
+            "Orphaned session marked as error: id=%s, cn=%s, connected_at=%s",
+            session.id,
+            cn,
+            session.connected_at,
+        )
+
+    if marked_count:
+        db.commit()
 
     logger.info(
-        f"Orphaned session cleanup completed: "
-        f"active={active_count}, orphaned={orphaned_count}, marked={marked_count}"
+        "Cleanup done: active=%d orphaned=%d marked=%d",
+        active_count,
+        orphaned_count,
+        marked_count,
     )
-
     return orphaned_count, marked_count
 
 
+# Сохраняем для совместимости со старыми вызовами.
+def mark_session_as_orphaned(db, session: Session) -> None:
+    """Помечает одну сессию как orphaned и коммитит. Используется в тестах."""
+    cn = session.account.cn if session.account else "unknown"
+    session.status = "error"
+    session.disconnected_at = datetime.utcnow()
+    db.commit()
+    logger.info(
+        "Orphaned session marked as error: id=%s, cn=%s, disconnected_at=%s",
+        session.id,
+        cn,
+        session.disconnected_at,
+    )
+
+
 def main():
-    """
-    Главная функция скрипта.
-    """
     logger.info("=" * 60)
     logger.info("Starting session-cleanup script")
-
     db = None
     try:
-        # Создаем сессию БД
         db = SessionLocal()
-
-        # Выполняем очистку
         orphaned_count, marked_count = cleanup_orphaned_sessions(db)
-
-        logger.info(f"Cleanup completed: {orphaned_count} orphaned, {marked_count} marked")
+        logger.info("Cleanup completed: %d orphaned, %d marked", orphaned_count, marked_count)
         return 0
-
-    except Exception as e:
-        logger.exception(f"Error in session cleanup: {e}")
+    except Exception as exc:
+        logger.exception("Error in session cleanup: %s", exc)
         return 1
     finally:
-        if db:
+        if db is not None:
             try:
                 db.close()
-            except Exception as e:
-                logger.error(f"Error closing database session: {e}")
+            except Exception as exc:
+                logger.error("Error closing DB session: %s", exc)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

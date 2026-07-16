@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 from core.database import SessionLocal
 from core.models import Account
+from core.serial import normalize_serial
 from collector.config import CERTS_DIR, CERT_EXTENSION, CRL_FILE
 
 # =============================================================================
@@ -109,10 +110,10 @@ def extract_cert_info(cert_path: str) -> dict:
             logger.warning(f"Certificate {cert_path} has no CN")
             return None
 
-        # Получаем даты валидности и серийный номер
-        valid_from = cert.not_valid_before_utc
-        valid_to = cert.not_valid_after_utc
-        serial_number = str(cert.serial_number)
+        # Получаем даты валидности (приводим к naive-UTC, т.к. в БД naive)
+        valid_from = cert.not_valid_before_utc.replace(tzinfo=None)
+        valid_to = cert.not_valid_after_utc.replace(tzinfo=None)
+        serial_number = normalize_serial(cert.serial_number)
 
         logger.debug(
             f"Certificate parsed: cn='{cn}', serial='{serial_number}', "
@@ -155,10 +156,10 @@ def parse_crl(crl_path: str) -> set:
         # Парсим CRL
         crl = x509.load_pem_x509_crl(crl_data, default_backend())
 
-        # Собираем серийные номера отозванных сертификатов
+        # Собираем серийные номера отозванных сертификатов (нормализованный hex)
         revoked_serials = set()
         for revoked_cert in crl:
-            revoked_serials.add(str(revoked_cert.serial_number))
+            revoked_serials.add(normalize_serial(revoked_cert.serial_number))
 
         logger.info(f"CRL parsed: {len(revoked_serials)} revoked certificates found")
         logger.debug(f"Revoked serials: {revoked_serials}")
