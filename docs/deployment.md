@@ -661,7 +661,6 @@ async def metrics():
     return {
         "active_sessions": await get_active_session_count(),
         "total_accounts": await get_total_account_count(),
-        "failed_attempts_24h": await get_failed_attempts_count(hours=24)
     }
 ```
 

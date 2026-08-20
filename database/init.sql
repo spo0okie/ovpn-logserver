@@ -69,25 +69,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Таблица connection_attempts (неудачные попытки подключения)
-CREATE TABLE IF NOT EXISTS connection_attempts (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    account_id INT UNSIGNED,
-    attempted_at DATETIME NOT NULL,
-    source_ip VARCHAR(45) NOT NULL,
-    cert_cn VARCHAR(255),
-    failure_reason VARCHAR(255) NOT NULL,
-    failure_type ENUM('auth_failed', 'cert_revoked', 'cert_expired', 'ccd_missing', 'tls_error', 'other') NOT NULL DEFAULT 'other',
-    details TEXT,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_account_id (account_id),
-    INDEX idx_attempted_at (attempted_at),
-    INDEX idx_source_ip (source_ip),
-    INDEX idx_failure_type (failure_type),
-    INDEX idx_cert_cn (cert_cn),
-    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Таблица geoip_cache (кэш GeoIP данных)
 CREATE TABLE IF NOT EXISTS geoip_cache (
     ip VARCHAR(45) PRIMARY KEY,

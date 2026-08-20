@@ -18,7 +18,6 @@ from core.tests.conftest import (
     db_session as db,
     sample_account,
     sample_session,
-    sample_connection_attempt,
     sample_geoip_cache,
 )
 
@@ -29,6 +28,5 @@ __all__ = [
     'db',
     'sample_account',
     'sample_session',
-    'sample_connection_attempt',
     'sample_geoip_cache',
 ]

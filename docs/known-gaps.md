@@ -5,9 +5,8 @@
 
 ## Функциональность
 
-**Неудачные попытки подключения не собираются.** Таблица `connection_attempts`,
-API `/api/v1/attempts` и страница «Attempts» существуют, но в таблицу не пишет ни
-один компонент — страница всегда пуста. Нужен разбор серверного лога OpenVPN.
+**Неудачные попытки подключения не собираются** и каркас для них удалён.
+Причины и возможный подход — [connection-attempts.md](connection-attempts.md).
 
 **Страница `/sessions` показывает время в UTC.** Таблица в
 `web/templates/sessions.html` рендерится клиентским DataTables через AJAX, и
@@ -26,8 +25,6 @@ API `/api/v1/attempts` и страница «Attempts» существуют, н
 
 - `accounts.html` предлагает сортировку `sort_by=has_ccd`, которой нет в
   `sort_column_map` (`web/api/accounts.py`) — молча сортирует по `cn`.
-- `attempts.html` предлагает фильтр `ip_blocked`, которого нет в ENUM
-  `failure_type`, и не предлагает существующий `tls_error`.
 - В списке аккаунтов не выводится `cert_count` (API его отдаёт).
 - В деталях аккаунта не показываются `valid_from` и `revoked_at` сертификатов.
 

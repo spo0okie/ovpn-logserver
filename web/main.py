@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from web.api import accounts, attempts, sessions, stats
+from web.api import accounts, sessions, stats
 from web.auth import get_current_user
 from web.routes import pages_router
 
@@ -77,9 +77,6 @@ app.include_router(
 )
 app.include_router(
     sessions.router, prefix="/api/v1", dependencies=[Depends(get_current_user)]
-)
-app.include_router(
-    attempts.router, prefix="/api/v1", dependencies=[Depends(get_current_user)]
 )
 app.include_router(
     stats.router, prefix="/api/v1", dependencies=[Depends(get_current_user)]

@@ -14,12 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, case
 
-from core.models import Account, Session as SessionModel, ConnectionAttempt
+from core.models import Account, Session as SessionModel
 from web.dependencies import get_db
 from web.schemas import (
     OverviewStats,
     ConnectionsStatsResponse,
-    FailuresStatsResponse,
     GeographyStatsResponse,
     ErrorResponse
 )
@@ -95,15 +94,6 @@ def get_overview_stats(
         SessionModel.connected_at >= month_start
     ).scalar() or 0
 
-    # Статистика по попыткам
-    failed_today = db.query(func.count(ConnectionAttempt.id)).filter(
-        ConnectionAttempt.attempted_at >= today_start
-    ).scalar() or 0
-
-    failed_week = db.query(func.count(ConnectionAttempt.id)).filter(
-        ConnectionAttempt.attempted_at >= week_start
-    ).scalar() or 0
-
     return {
         "accounts": {
             "total_users": total_users,
@@ -118,10 +108,6 @@ def get_overview_stats(
             "today": today_sessions,
             "this_week": week_sessions,
             "this_month": month_sessions
-        },
-        "attempts": {
-            "failed_today": failed_today,
-            "failed_this_week": failed_week
         }
     }
 
@@ -208,81 +194,6 @@ def get_connections_stats(
     return {
         "group_by": group_by,
         "data": data
-    }
-
-
-# =============================================================================
-# Failures Stats
-# =============================================================================
-
-@router.get(
-    "/stats/failures",
-    response_model=FailuresStatsResponse,
-    responses={
-        400: {"model": ErrorResponse},
-        401: {"model": ErrorResponse}
-    }
-)
-def get_failures_stats(
-    from_date: datetime = Query(..., alias="from", description="Начало периода (обязательный)"),
-    to_date: datetime = Query(..., alias="to", description="Конец периода (обязательный)"),
-    group_by: str = Query("type", description="Группировка: type, day, account"),
-    db: Session = Depends(get_db)
-):
-    """
-    Статистика неудачных попыток.
-
-    I7.4: Параметры from, to (обязательные), group_by
-    I7.1: Только SELECT с агрегацией
-    """
-    # I7.4: Валидация group_by
-    if group_by not in ["type", "day", "account"]:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Invalid group_by parameter", "code": "INVALID_PARAMETER"}
-        )
-
-    # I7.1: Только SELECT запросы
-    query = db.query(ConnectionAttempt).filter(
-        ConnectionAttempt.attempted_at >= from_date,
-        ConnectionAttempt.attempted_at <= to_date
-    )
-
-    attempts = query.all()
-    total = len(attempts)
-
-    if total == 0:
-        return {
-            "group_by": group_by,
-            "data": []
-        }
-
-    from collections import defaultdict
-    groups = defaultdict(int)
-
-    for attempt in attempts:
-        if group_by == "type":
-            key = attempt.failure_type
-        elif group_by == "day":
-            key = attempt.attempted_at.strftime("%Y-%m-%d")
-        else:  # account
-            key = attempt.cert_cn or "unknown"
-
-        groups[key] += 1
-
-    # Формируем ответ
-    result_data = []
-    for key, count in sorted(groups.items(), key=lambda x: -x[1]):
-        percentage = round((count / total) * 100, 1)
-        result_data.append({
-            "failure_type": str(key),
-            "count": count,
-            "percentage": percentage
-        })
-
-    return {
-        "group_by": group_by,
-        "data": result_data
     }
 
 

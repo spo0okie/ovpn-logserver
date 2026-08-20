@@ -26,7 +26,7 @@ from core.database import Base, get_db  # noqa: E402
 # поэтому подменять нужно обе зависимости, иначе роуты пойдут в модульный
 # engine (и при запуске всего набора тестов — не в тестовую БД).
 from web.dependencies import get_db as web_get_db  # noqa: E402
-from core.models import Account, Session as SessionModel, ConnectionAttempt  # noqa: E402
+from core.models import Account, Session as SessionModel  # noqa: E402
 from web.main import app  # noqa: E402
 
 
@@ -176,25 +176,3 @@ def sample_sessions(db: Session, sample_account: Account):
     return sessions
 
 
-@pytest.fixture
-def sample_attempts(db: Session, sample_account: Account):
-    """Создает тестовые попытки подключения."""
-    attempts = []
-
-    for i, ftype in enumerate(["auth_failed", "cert_revoked", "ccd_missing"]):
-        attempt = ConnectionAttempt(
-            account_id=sample_account.id if i % 2 == 0 else None,
-            attempted_at=datetime.utcnow() - timedelta(hours=i),
-            source_ip=f"10.0.0.{i}",
-            cert_cn=sample_account.cn if i % 2 == 0 else "unknown_user",
-            failure_reason=f"Test failure {i}",
-            failure_type=ftype,
-            details=f"Details {i}"
-        )
-        db.add(attempt)
-        attempts.append(attempt)
-
-    db.commit()
-    for a in attempts:
-        db.refresh(a)
-    return attempts

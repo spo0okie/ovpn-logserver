@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from core.models import Account, Session as SessionModel, ConnectionAttempt
+from core.models import Account, Session as SessionModel
 
 
 # =============================================================================
@@ -48,10 +48,6 @@ class TestI82Authentication:
         response = client.get("/sessions", follow_redirects=False)
         assert response.status_code in [307, 302, 401]
     
-    def test_attempts_page_requires_auth(self, client: TestClient):
-        """Страница попыток требует аутентификации."""
-        response = client.get("/attempts", follow_redirects=False)
-        assert response.status_code in [307, 302, 401]
     
     def test_login_page_accessible_without_auth(self, client: TestClient):
         """Страница логина доступна без аутентификации."""
@@ -235,31 +231,6 @@ class TestI83DataConsistency:
         # Проверяем что структура таблицы есть
         assert "table" in page_response.text.lower()
     
-    def test_attempts_data_matches_api(
-        self, client: TestClient, sample_attempts: list, auth_headers: dict
-    ):
-        """
-        Данные попыток на UI соответствуют API.
-        """
-        credentials = base64.b64encode(b"admin:admin_password_123").decode()
-        
-        # Получаем данные через API
-        api_response = client.get("/api/v1/attempts", headers=auth_headers)
-        assert api_response.status_code == 200
-        api_data = api_response.json()
-        
-        # Получаем HTML страницу
-        page_response = client.get(
-            "/attempts",
-            headers={"Authorization": f"Basic {credentials}"},
-            cookies={"auth": credentials}
-        )
-        
-        # Проверяем что страница загрузилась
-        assert page_response.status_code == 200
-        
-        # Проверяем что структура таблицы есть
-        assert "table" in page_response.text.lower()
 
 
 # =============================================================================
@@ -289,7 +260,6 @@ class TestI84Navigation:
             assert "dashboard" in content or "href=\"/\"" in content
             assert "accounts" in content or "href=\"/accounts\"" in content
             assert "sessions" in content or "href=\"/sessions\"" in content
-            assert "attempts" in content or "href=\"/attempts\"" in content
     
     def test_dashboard_link_works(self, client: TestClient, auth_headers: dict):
         """Ссылка на Dashboard работает."""
@@ -324,16 +294,6 @@ class TestI84Navigation:
         )
         assert response.status_code in [200, 307, 302]
     
-    def test_attempts_link_works(self, client: TestClient, auth_headers: dict):
-        """Ссылка на Attempts работает."""
-        credentials = base64.b64encode(b"admin:admin_password_123").decode()
-        
-        response = client.get(
-            "/attempts",
-            headers={"Authorization": f"Basic {credentials}"},
-            cookies={"auth": credentials}
-        )
-        assert response.status_code in [200, 307, 302]
     
     def test_account_detail_link_from_list(
         self, client: TestClient, sample_account: Account, auth_headers: dict

@@ -61,7 +61,6 @@ class Account(Base):
         created_at: Дата создания записи
         updated_at: Дата последнего обновления
         sessions: Связанные VPN сессии
-        connection_attempts: Связанные попытки подключения
     """
 
     __tablename__ = "accounts"  # I2.2: Имя таблицы совпадает со схемой БД
@@ -125,13 +124,6 @@ class Account(Base):
         "Session",
         back_populates="account",
         cascade="all, delete-orphan",  # ON DELETE CASCADE
-        lazy="dynamic"
-    )
-
-    # account.connection_attempts -> список попыток подключения
-    connection_attempts: Mapped[List["ConnectionAttempt"]] = relationship(
-        "ConnectionAttempt",
-        back_populates="account",
         lazy="dynamic"
     )
 
@@ -335,85 +327,6 @@ class Session(Base):
     
     def __repr__(self) -> str:
         return f"<Session(id={self.id}, account_id={self.account_id}, status='{self.status}')>"
-
-
-class ConnectionAttempt(Base):
-    """
-    Модель для таблицы connection_attempts - неудачные попытки подключения.
-    
-    Attributes:
-        id: Первичный ключ (BIGINT UNSIGNED AUTO_INCREMENT)
-        account_id: Внешний ключ на accounts (INT UNSIGNED, nullable)
-        attempted_at: Время попытки
-        source_ip: IP адрес источника
-        cert_cn: CN из сертификата
-        failure_reason: Причина ошибки
-        failure_type: Тип ошибки (enum)
-        details: Дополнительные детали
-        account: Связанный аккаунт (если найден)
-    """
-    
-    __tablename__ = "connection_attempts"  # I2.2: Имя таблицы совпадает со схемой БД
-    
-    # I2.3: Типы данных соответствуют SQL типам
-    id: Mapped[int] = mapped_column(
-        get_bigint_type(unsigned=True, autoincrement=True),  # BIGINT UNSIGNED AUTO_INCREMENT
-        primary_key=True,
-        autoincrement=True
-    )
-    account_id: Mapped[Optional[int]] = mapped_column(
-        get_int_type(unsigned=True),  # INT UNSIGNED
-        ForeignKey("accounts.id", ondelete="SET NULL"),  # I1.4: ON DELETE SET NULL
-        nullable=True
-    )
-    attempted_at: Mapped[datetime] = mapped_column(
-        DateTime,  # DATETIME NOT NULL
-        nullable=False
-    )
-    source_ip: Mapped[str] = mapped_column(
-        String(45),  # VARCHAR(45) NOT NULL
-        nullable=False
-    )
-    cert_cn: Mapped[Optional[str]] = mapped_column(
-        String(255),  # VARCHAR(255)
-        nullable=True
-    )
-    failure_reason: Mapped[str] = mapped_column(
-        String(255),  # VARCHAR(255) NOT NULL
-        nullable=False
-    )
-    failure_type: Mapped[str] = mapped_column(
-        Enum(
-            "auth_failed",
-            "cert_revoked",
-            "cert_expired",
-            "ccd_missing",
-            "tls_error",
-            "other",
-            name="failure_type_enum"
-        ),  # ENUM
-        default="other",
-        nullable=False
-    )
-    details: Mapped[Optional[str]] = mapped_column(
-        Text,  # TEXT
-        nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
-        default=datetime.utcnow,
-        nullable=False
-    )
-
-    # I2.4: Отношения настроены корректно
-    # connection_attempt.account -> связанный аккаунт
-    account: Mapped[Optional["Account"]] = relationship(
-        "Account",
-        back_populates="connection_attempts"
-    )
-    
-    def __repr__(self) -> str:
-        return f"<ConnectionAttempt(id={self.id}, failure_type='{self.failure_type}')>"
 
 
 class GeoIPCache(Base):

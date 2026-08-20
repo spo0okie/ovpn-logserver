@@ -83,6 +83,7 @@ ENUM и внешним ключам локально не ловятся.
 | [deployment.md](docs/deployment.md) | развёртывание и systemd |
 | [timezone.md](docs/timezone.md) | как хранится и отображается время |
 | [known-gaps.md](docs/known-gaps.md) | что заявлено, но не работает |
+| [connection-attempts.md](docs/connection-attempts.md) | почему не собираются неудачные попытки |
 
 Перед изменением кода стоит заглянуть в `invariants.md`: часть требований
 неочевидна, а их нарушение ломает VPN или портит журнал. Самый жёсткий пример —

@@ -180,33 +180,6 @@ class TestResilience:
         assert data["data"][0]["bytes_sent"] == 9999
         assert data["data"][0]["bytes_received"] == 8888
     
-    def test_attempts_preserved_after_restart(self, db, api_client, sample_data_factory, auth_headers, restart_services):
-        """
-        Тест: попытки подключения сохраняются после перезапуска.
-        
-        Проверяет что неудачные попытки подключения сохраняются.
-        """
-        # Arrange
-        account = sample_data_factory.create_account(cn="attempt_test_user")
-        attempt = sample_data_factory.create_attempt(
-            account=account,
-            failure_type="auth_failed",
-            failure_reason="Test failure after restart"
-        )
-        
-        attempt_id = attempt.id
-        
-        # Act
-        restart_services()
-        
-        # Assert
-        response = api_client.get("/api/v1/attempts/", headers=auth_headers)
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Ищем нашу попытку
-        found = any(a["id"] == attempt_id for a in data["data"])
-        assert found, "Попытка подключения должна сохраниться после перезапуска"
     
     def test_geoip_cache_preserved_after_restart(self, db, sample_data_factory, restart_services):
         """

@@ -146,24 +146,11 @@
                     </div>
                 {% endif %}
                 
-                {% if stats.attempts.failed_today > 0 %}
-                    <div class="alert alert-danger mb-2">
-                        <i class="bi bi-x-octagon"></i> 
-                        <strong>{{ stats.attempts.failed_today }}</strong> failed attempts today
-                    </div>
-                {% endif %}
-                
-                {% if stats.accounts.expiring_soon == 0 and stats.attempts.failed_today == 0 %}
+                {% if stats.accounts.expiring_soon == 0 %}
                     <div class="alert alert-success mb-0">
                         <i class="bi bi-check-circle"></i> No warnings
                     </div>
                 {% endif %}
-                
-                <div class="mt-3">
-                    <a href="/attempts" class="btn btn-sm btn-outline-danger">
-                        <i class="bi bi-eye"></i> View Failed Attempts
-                    </a>
-                </div>
             </div>
         </div>
     </div>
@@ -183,10 +170,6 @@
                     <a href="/sessions" class="list-group-item list-group-item-action">
                         <i class="bi bi-diagram-3"></i> View Sessions
                         <span class="badge bg-success rounded-pill float-end">{{ stats.sessions.active }} active</span>
-                    </a>
-                    <a href="/attempts" class="list-group-item list-group-item-action">
-                        <i class="bi bi-exclamation-triangle"></i> Failed Attempts
-                        <span class="badge bg-danger rounded-pill float-end">{{ stats.attempts.failed_today }} today</span>
                     </a>
                 </div>
             </div>

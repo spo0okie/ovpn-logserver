@@ -24,7 +24,7 @@ OpenVPN ──(script-hooks)──> collector ──> MySQL <── web (FastAPI
     для обнаружения orphaned-сессий).
 - **`core/`** — общий код: `models.py` (SQLAlchemy), `database.py`, `config.py`,
   `geoip.py`, `serial.py`.
-- **`web/`** — FastAPI: `api/{accounts,sessions,attempts,stats}.py` под `/api/v1`,
+- **`web/`** — FastAPI: `api/{accounts,sessions,stats}.py` под `/api/v1`,
   `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
 - **`database/`** — Alembic (`migrations/`) и `init.sql` для ручного bootstrap.
 
@@ -54,11 +54,10 @@ Management-сокет используется только для чтения 
 
 ## Учёт неудачных попыток — не реализован
 
-Таблица `connection_attempts`, API `/api/v1/attempts` и страница «Attempts»
-существуют, но **в таблицу никто не пишет**: ни один компонент её не заполняет.
-Страница всегда пуста. Для заполнения нужен разбор серверного лога OpenVPN
-(TLS-ошибки, отзыв, истёкший сертификат) — от `tls-verify`-хука для этого
-сознательно отказались, чтобы не вмешиваться в процесс аутентификации VPN.
+Система фиксирует только состоявшиеся подключения: `client-connect` при отказе не
+вызывается, а «хука на неудачу» в OpenVPN не существует. Почему так и как это
+можно было бы сделать через management-интерфейс —
+[connection-attempts.md](connection-attempts.md).
 
 ## Конфигурация
 

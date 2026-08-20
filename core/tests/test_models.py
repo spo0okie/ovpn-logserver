@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.database import Base
-from core.models import Account, Session as SessionModel, ConnectionAttempt, GeoIPCache
+from core.models import Account, Session as SessionModel, GeoIPCache
 
 
 # ============================================================================
@@ -37,10 +37,6 @@ class TestI21BaseInheritance:
         assert issubclass(SessionModel, Base)
         assert SessionModel.__base__ is Base
     
-    def test_connection_attempt_inherits_from_base(self):
-        """ConnectionAttempt должен наследоваться от Base."""
-        assert issubclass(ConnectionAttempt, Base)
-        assert ConnectionAttempt.__base__ is Base
     
     def test_geoip_cache_inherits_from_base(self):
         """GeoIPCache должен наследоваться от Base."""
@@ -52,7 +48,6 @@ class TestI21BaseInheritance:
         table_names = Base.metadata.tables.keys()
         assert "accounts" in table_names
         assert "sessions" in table_names
-        assert "connection_attempts" in table_names
         assert "geoip_cache" in table_names
 
 
@@ -73,9 +68,6 @@ class TestI22TableAndColumnNames:
         """Имя таблицы Session должно быть 'sessions'."""
         assert SessionModel.__tablename__ == "sessions"
     
-    def test_connection_attempt_tablename(self):
-        """Имя таблицы ConnectionAttempt должно быть 'connection_attempts'."""
-        assert ConnectionAttempt.__tablename__ == "connection_attempts"
     
     def test_geoip_cache_tablename(self):
         """Имя таблицы GeoIPCache должно быть 'geoip_cache'."""
@@ -106,17 +98,7 @@ class TestI22TableAndColumnNames:
         }
         assert column_names == expected
     
-    # --- Тесты имен полей ConnectionAttempt ---
     
-    def test_connection_attempt_column_names(self):
-        """ConnectionAttempt должен иметь все поля из схемы БД."""
-        mapper = inspect(ConnectionAttempt)
-        column_names = {col.name for col in mapper.columns}
-        expected = {
-            "id", "account_id", "attempted_at", "source_ip", "cert_cn",
-            "failure_reason", "failure_type", "details", "created_at"
-        }
-        assert column_names == expected
     
     # --- Тесты имен полей GeoIPCache ---
     
@@ -202,23 +184,9 @@ class TestI23ColumnTypes:
         col = SessionModel.__table__.c.status
         assert isinstance(col.type, Enum)
     
-    # --- Тесты типов ConnectionAttempt ---
     
-    def test_connection_attempt_id_type(self):
-        """ConnectionAttempt.id должен быть Integer с autoincrement."""
-        col = ConnectionAttempt.__table__.c.id
-        # Используем Integer для совместимости с SQLite (autoincrement работает только с Integer)
-        assert isinstance(col.type, Integer)
     
-    def test_connection_attempt_failure_type_type(self):
-        """ConnectionAttempt.failure_type должен быть Enum."""
-        col = ConnectionAttempt.__table__.c.failure_type
-        assert isinstance(col.type, Enum)
     
-    def test_connection_attempt_details_type(self):
-        """ConnectionAttempt.details должен быть Text."""
-        col = ConnectionAttempt.__table__.c.details
-        assert isinstance(col.type, Text)
     
     # --- Тесты типов GeoIPCache ---
     
@@ -268,27 +236,7 @@ class TestI24Relationships:
         assert isinstance(session.account, Account)
         assert session.account.id == sample_session.account_id
     
-    def test_account_has_connection_attempts_relationship(self, db_session: Session, sample_account: Account, sample_connection_attempt: ConnectionAttempt):
-        """Account.connection_attempts должен возвращать список попыток."""
-        # Перезагружаем аккаунт из БД
-        account = db_session.query(Account).filter_by(id=sample_account.id).first()
-        
-        assert hasattr(account, "connection_attempts")
-        
-        attempts = account.connection_attempts.all()
-        assert isinstance(attempts, list)
-        assert len(attempts) == 1
-        assert isinstance(attempts[0], ConnectionAttempt)
-        assert attempts[0].id == sample_connection_attempt.id
     
-    def test_connection_attempt_has_account_relationship(self, db_session: Session, sample_connection_attempt: ConnectionAttempt):
-        """ConnectionAttempt.account должен возвращать связанный Account."""
-        # Перезагружаем попытку из БД
-        attempt = db_session.query(ConnectionAttempt).filter_by(id=sample_connection_attempt.id).first()
-        
-        assert hasattr(attempt, "account")
-        assert isinstance(attempt.account, Account)
-        assert attempt.account.id == sample_connection_attempt.account_id
     
     def test_cascade_delete_sessions(self, db_session: Session, sample_account: Account, sample_session: SessionModel):
         """При удалении Account должны удаляться связанные Session (CASCADE)."""
@@ -303,18 +251,6 @@ class TestI24Relationships:
         deleted_session = db_session.query(SessionModel).filter_by(id=session_id).first()
         assert deleted_session is None
     
-    def test_set_null_connection_attempts(self, db_session: Session, sample_account: Account, sample_connection_attempt: ConnectionAttempt):
-        """При удалении Account у ConnectionAttempt должен сбрасываться account_id (SET NULL)."""
-        attempt_id = sample_connection_attempt.id
-        
-        # Удаляем аккаунт
-        db_session.delete(sample_account)
-        db_session.commit()
-        
-        # Проверяем, что попытка осталась, но account_id стал NULL
-        attempt = db_session.query(ConnectionAttempt).filter_by(id=attempt_id).first()
-        assert attempt is not None
-        assert attempt.account_id is None
 
 
 # ============================================================================
@@ -436,47 +372,8 @@ class TestI25DatabaseConstraints:
         
         db_session.rollback()
     
-    def test_connection_attempt_attempted_at_not_null(self, db_session: Session):
-        """ConnectionAttempt.attempted_at не может быть NULL."""
-        attempt = ConnectionAttempt(
-            attempted_at=None,  # Нарушаем NOT NULL
-            source_ip="192.168.1.1",
-            failure_reason="Test"
-        )
-        db_session.add(attempt)
-        
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-        
-        db_session.rollback()
     
-    def test_connection_attempt_source_ip_not_null(self, db_session: Session):
-        """ConnectionAttempt.source_ip не может быть NULL."""
-        attempt = ConnectionAttempt(
-            attempted_at=datetime.utcnow(),
-            source_ip=None,  # Нарушаем NOT NULL
-            failure_reason="Test"
-        )
-        db_session.add(attempt)
-        
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-        
-        db_session.rollback()
     
-    def test_connection_attempt_failure_reason_not_null(self, db_session: Session):
-        """ConnectionAttempt.failure_reason не может быть NULL."""
-        attempt = ConnectionAttempt(
-            attempted_at=datetime.utcnow(),
-            source_ip="192.168.1.1",
-            failure_reason=None  # Нарушаем NOT NULL
-        )
-        db_session.add(attempt)
-        
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-        
-        db_session.rollback()
     
     # --- Тест I1.3: FOREIGN KEY с ON DELETE CASCADE ---
     
@@ -497,37 +394,7 @@ class TestI25DatabaseConstraints:
     
     # --- Тест I1.4: FOREIGN KEY с ON DELETE SET NULL ---
     
-    def test_connection_attempt_account_id_nullable(self, db_session: Session):
-        """ConnectionAttempt.account_id может быть NULL."""
-        # Создаем попытку без account_id
-        attempt = ConnectionAttempt(
-            attempted_at=datetime.utcnow(),
-            source_ip="192.168.1.1",
-            failure_reason="Unknown certificate",
-            account_id=None  # NULL разрешен
-        )
-        db_session.add(attempt)
-        db_session.commit()
-        db_session.refresh(attempt)
-        
-        assert attempt.id is not None
-        assert attempt.account_id is None
     
-    def test_connection_attempt_account_id_foreign_key(self, db_session: Session):
-        """ConnectionAttempt.account_id должен иметь внешний ключ на accounts.id."""
-        # Пытаемся создать попытку с несуществующим account_id
-        attempt = ConnectionAttempt(
-            attempted_at=datetime.utcnow(),
-            source_ip="192.168.1.1",
-            failure_reason="Test",
-            account_id=99999  # Несуществующий ID
-        )
-        db_session.add(attempt)
-        
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-        
-        db_session.rollback()
 
 
 # ============================================================================
@@ -551,12 +418,6 @@ class TestModelBehavior:
         assert "Session" in repr_str
         assert "active" in repr_str
     
-    def test_connection_attempt_repr(self):
-        """ConnectionAttempt.__repr__ должен возвращать корректную строку."""
-        attempt = ConnectionAttempt(id=1, failure_type="auth_failed")
-        repr_str = repr(attempt)
-        assert "ConnectionAttempt" in repr_str
-        assert "auth_failed" in repr_str
     
     def test_geoip_cache_repr(self):
         """GeoIPCache.__repr__ должен возвращать корректную строку."""
@@ -606,19 +467,6 @@ class TestModelBehavior:
         
         assert session.status == "active"
     
-    def test_connection_attempt_default_failure_type(self, db_session: Session):
-        """ConnectionAttempt.failure_type по умолчанию должен быть 'other'."""
-        attempt = ConnectionAttempt(
-            attempted_at=datetime.utcnow(),
-            source_ip="192.168.1.1",
-            failure_reason="Unknown error"
-            # failure_type не указан
-        )
-        db_session.add(attempt)
-        db_session.commit()
-        db_session.refresh(attempt)
-        
-        assert attempt.failure_type == "other"
     
     def test_account_default_is_revoked(self, db_session: Session):
         """Account.is_revoked по умолчанию должен быть False."""

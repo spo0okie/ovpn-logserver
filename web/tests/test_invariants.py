@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from core.models import Account, Session as SessionModel, ConnectionAttempt
+from core.models import Account, Session as SessionModel
 
 
 # =============================================================================
@@ -69,10 +69,6 @@ class TestI71_ReadOnlyAPI:
         writes = check_file_for_writes('web/api/sessions.py')
         assert len(writes) == 0, f"Found write operations in sessions.py: {writes}"
 
-    def test_attempts_no_write_operations(self):
-        """Проверяет attempts.py на отсутствие операций записи."""
-        writes = check_file_for_writes('web/api/attempts.py')
-        assert len(writes) == 0, f"Found write operations in attempts.py: {writes}"
 
     def test_stats_no_write_operations(self):
         """Проверяет stats.py на отсутствие операций записи."""
@@ -107,10 +103,6 @@ class TestI76_AuthRequired:
         response = client.get("/api/v1/sessions/active")
         assert response.status_code == 401
 
-    def test_attempts_list_requires_auth(self, client: TestClient):
-        """GET /attempts требует авторизации."""
-        response = client.get("/api/v1/attempts")
-        assert response.status_code == 401
 
     def test_stats_overview_requires_auth(self, client: TestClient):
         """GET /stats/overview требует авторизации."""
@@ -239,14 +231,6 @@ class TestI74_Filters:
         data = response.json()
         assert len(data["data"]) == 2
 
-    def test_attempts_filter_failure_type(self, client: TestClient, sample_attempts: list, auth_headers: dict):
-        """Фильтр failure_type для попыток."""
-        response = client.get("/api/v1/attempts?failure_type=cert_revoked", headers=auth_headers)
-        assert response.status_code == 200
-
-        data = response.json()
-        assert len(data["data"]) == 1
-        assert data["data"][0]["failure_type"] == "cert_revoked"
 
 
 # =============================================================================
@@ -278,14 +262,6 @@ class TestI75_NotFoundHandling:
         assert data["data"] == []
         assert data["meta"]["total"] == 0
 
-    def test_empty_attempts_list_returns_empty(self, client: TestClient, auth_headers: dict):
-        """GET /attempts возвращает пустой список если нет данных."""
-        response = client.get("/api/v1/attempts", headers=auth_headers)
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["data"] == []
-        assert data["meta"]["total"] == 0
 
 
 # =============================================================================
@@ -377,28 +353,6 @@ class TestI72_ResponseFormat:
             for field in required_fields:
                 assert field in session, f"Missing field: {field}"
 
-    def test_attempts_list_format(self, client: TestClient, sample_attempts: list, auth_headers: dict):
-        """Проверяет формат списка попыток."""
-        response = client.get("/api/v1/attempts", headers=auth_headers)
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "data" in data
-        assert "meta" in data
-
-        if data["data"]:
-            attempt = data["data"][0]
-            required_fields = [
-                "id", "account", "attempted_at", "source_ip",
-                "cert_cn", "failure_reason", "failure_type", "details"
-            ]
-            for field in required_fields:
-                assert field in attempt, f"Missing field: {field}"
-
-            # Проверяем структуру account
-            account = attempt["account"]
-            assert "cn" in account
-            assert "prefix" in account
 
     def test_stats_overview_format(self, client: TestClient, sample_accounts: list, sample_sessions: list, auth_headers: dict):
         """Проверяет формат общей статистики."""
@@ -408,7 +362,6 @@ class TestI72_ResponseFormat:
         data = response.json()
         assert "accounts" in data
         assert "sessions" in data
-        assert "attempts" in data
 
         # Проверяем accounts
         accounts = data["accounts"]
@@ -427,7 +380,3 @@ class TestI72_ResponseFormat:
         assert "this_week" in sessions
         assert "this_month" in sessions
 
-        # Проверяем attempts
-        attempts = data["attempts"]
-        assert "failed_today" in attempts
-        assert "failed_this_week" in attempts

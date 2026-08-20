@@ -46,7 +46,7 @@ alembic -c database/alembic.ini revision -m "описание"
   - **Периодическая синхронизация** `sync_all.py` (systemd timer `openvpn-sync.timer`) — запускает по порядку: `cert_sync` → `crl_checker` → `ccd_checker` → `session_cleanup`. Порядок важен: cleanup идёт только после успешной синхронизации.
   - `mgmt_client.py` — чтение management-сокета OpenVPN (список живых клиентов для orphan-detection).
 - **`core/`** — `models.py` (SQLAlchemy: Account, Session, ConnectionAttempt, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
-- **`web/`** — FastAPI: `api/{accounts,sessions,attempts,stats}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
+- **`web/`** — FastAPI: `api/{accounts,sessions,stats}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
 - **`database/`** — Alembic (`alembic.ini`, `migrations/`) и `init.sql`.
 
 ## Конфигурация
@@ -75,6 +75,7 @@ alembic -c database/alembic.ini revision -m "описание"
 - `openvpn-setup.md` — что обязано быть в `server.conf`, иначе collector молча не собирает данные.
 - `deployment.md` — развёртывание и systemd.
 - `timezone.md` — naive-UTC в БД, конвертация на границе отображения.
-- `known-gaps.md` — что заявлено, но не работает (в т.ч. `connection_attempts` не заполняется).
+- `known-gaps.md` — что заявлено, но не работает.
+- `connection-attempts.md` — почему учёт неудачных попыток не реализован и как его сделать через management-интерфейс.
 
 `tz.md` в корне — исходное ТЗ. `README.md` — точка входа для внешнего читателя.

@@ -5,7 +5,7 @@ Core модуль для работы с базой данных OpenVPN LogServ
 """
 
 from .database import engine, SessionLocal, Base, get_db
-from .models import Account, Session, ConnectionAttempt, GeoIPCache
+from .models import Account, Session, GeoIPCache
 
 __all__ = [
     # Database
@@ -16,6 +16,5 @@ __all__ = [
     # Models
     "Account",
     "Session",
-    "ConnectionAttempt",
-    "GeoIPCache",
+        "GeoIPCache",
 ]

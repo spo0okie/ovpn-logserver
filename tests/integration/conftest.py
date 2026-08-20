@@ -33,7 +33,7 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # тесты работают со своим engine и подменяют зависимости FastAPI (см. ниже).
 
 from core.database import Base, get_db, SessionLocal, engine as core_engine
-from core.models import Account, Session as SessionModel, ConnectionAttempt
+from core.models import Account, Session as SessionModel
 from web.dependencies import get_db as web_get_db
 from web.main import app
 from collector.client_connect import client_connect as collector_client_connect
@@ -456,22 +456,6 @@ def sample_data_factory(db):
             self.db.refresh(session)
             return session
         
-        def create_attempt(self, account: Account = None, **kwargs) -> ConnectionAttempt:
-            """Создает тестовую попытку подключения."""
-            self._counter += 1
-            attempt = ConnectionAttempt(
-                account_id=account.id if account else None,
-                attempted_at=kwargs.get('attempted_at', datetime.utcnow() - timedelta(minutes=self._counter)),
-                source_ip=kwargs.get('source_ip', f"10.0.0.{self._counter}"),
-                cert_cn=kwargs.get('cert_cn', account.cn if account else f"unknown_{self._counter}"),
-                failure_reason=kwargs.get('failure_reason', "Test failure"),
-                failure_type=kwargs.get('failure_type', "auth_failed"),
-                details=kwargs.get('details', "Test details")
-            )
-            self.db.add(attempt)
-            self.db.commit()
-            self.db.refresh(attempt)
-            return attempt
     
     return SampleDataFactory(db)
 

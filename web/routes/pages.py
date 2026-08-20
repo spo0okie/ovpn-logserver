@@ -17,7 +17,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from web.api import accounts as accounts_api
-from web.api import attempts as attempts_api
 from web.api import sessions as sessions_api
 from web.api import stats as stats_api
 from web.auth import (
@@ -277,44 +276,5 @@ def sessions_list(
             "source_ip": source_ip,
             "status": status,
             "country": country,
-        },
-    )
-
-
-# =============================================================================
-# Attempts
-# =============================================================================
-
-
-@router.get("/attempts", response_class=HTMLResponse)
-def attempts_list(
-    request: Request,
-    page: int = 1,
-    per_page: int = 20,
-    account: Optional[str] = None,
-    source_ip: Optional[str] = None,
-    failure_type: Optional[str] = None,
-    _user: str = Depends(web_user),
-    db: Session = Depends(get_db),
-):
-    page, per_page = _clamp_pagination(page, per_page)
-    attempts = attempts_api.list_attempts(
-        page=page,
-        per_page=per_page,
-        account=account,
-        from_date=None,
-        to_date=None,
-        failure_type=failure_type,
-        source_ip=source_ip,
-        db=db,
-    )
-    return templates.TemplateResponse(
-        "attempts.html",
-        {
-            "request": request,
-            "attempts": attempts,
-            "account": account,
-            "source_ip": source_ip,
-            "failure_type": failure_type,
         },
     )

@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 
 from core.database import Base
-from core.models import Account, Session as SessionModel, ConnectionAttempt, GeoIPCache
+from core.models import Account, Session as SessionModel, GeoIPCache
 
 
 # Используем SQLite в памяти для тестов (быстро и изолированно)
@@ -148,31 +148,6 @@ def sample_session(db_session: Session, sample_account: Account) -> SessionModel
     return session
 
 
-@pytest.fixture
-def sample_connection_attempt(db_session: Session, sample_account: Account) -> ConnectionAttempt:
-    """
-    Фикстура создает тестовую попытку подключения.
-    
-    Args:
-        db_session: Сессия БД
-        sample_account: Тестовый аккаунт
-    
-    Returns:
-        ConnectionAttempt: Созданная попытка подключения
-    """
-    attempt = ConnectionAttempt(
-        account_id=sample_account.id,
-        attempted_at=datetime.utcnow(),
-        source_ip="192.168.1.100",
-        cert_cn="test_user",
-        failure_reason="Certificate revoked",
-        failure_type="cert_revoked",
-        details="Certificate was revoked on 2024-01-01"
-    )
-    db_session.add(attempt)
-    db_session.commit()
-    db_session.refresh(attempt)
-    return attempt
 
 
 @pytest.fixture

@@ -30,9 +30,11 @@ alembic -c database/alembic.ini revision -m "описание"
   удаляет `uk_cn`, создаёт `uk_cn_serial (cn, serial_number)`. Существующие строки
   получают `serial_number = CONCAT('legacy_', id)`. Подробности и подводные камни —
   [multi-certificate.md](multi-certificate.md).
-- **003** — индексы под фактические запросы: `connection_attempts(cert_cn)` для
-  фильтра в `/attempts` и композитный `sessions(status, connected_at)` для
-  `/sessions/active` и `session_cleanup`.
+- **003** — индексы под фактические запросы: композитный
+  `sessions(status, connected_at)` для `/sessions/active` и `session_cleanup`
+  (индекс на `connection_attempts` удалён вместе с таблицей в 004).
+- **004** — удаление таблицы `connection_attempts`, см.
+  [connection-attempts.md](connection-attempts.md).
 
 ⚠️ В Docker таблицы создаёт **только** Alembic (entrypoint web-контейнера).
 `docker/mysql/init.sql` таблицы не создаёт намеренно: когда он это делал,
@@ -44,8 +46,6 @@ alembic -c database/alembic.ini revision -m "описание"
   строк с одним `cn`.
 - **`sessions`** — журнал сессий. FK на `accounts` с `ON DELETE CASCADE`.
   `status`: `active` / `closed` / `error`.
-- **`connection_attempts`** — неудачные попытки. FK с `ON DELETE SET NULL`.
-  ⚠️ Не заполняется ни одним компонентом, см. [known-gaps.md](known-gaps.md).
 - **`geoip_cache`** — кэш геолокации по IP, PK — сам `ip`. Записи с истёкшим
   `expires_at` удаляются при обращении.
 
@@ -65,8 +65,7 @@ alembic -c database/alembic.ini revision -m "описание"
 
 ## Каскады
 
-Удаление `accounts` уносит связанные `sessions` (CASCADE) и обнуляет `account_id`
-у `connection_attempts` (SET NULL). У связей не выставлен `passive_deletes`,
+Удаление `accounts` уносит связанные `sessions` (CASCADE). У связи не выставлен `passive_deletes`,
 поэтому удаление аккаунта через ORM грузит все его сессии в память и удаляет по
 одной — на большой истории это тысячи запросов в одной транзакции. Удаление
 напрямую в SQL отрабатывает корректно за счёт FK.

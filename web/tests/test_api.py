@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from core.models import Account, Session as SessionModel, ConnectionAttempt
+from core.models import Account, Session as SessionModel
 
 
 class TestAccountsAPI:
@@ -82,25 +82,6 @@ class TestSessionsAPI:
         assert len(data["data"]) == 1
 
 
-class TestAttemptsAPI:
-    """Тесты для endpoints попыток подключения."""
-
-    def test_list_attempts_success(self, client: TestClient, sample_attempts: list, auth_headers: dict):
-        """Успешное получение списка попыток."""
-        response = client.get("/api/v1/attempts", headers=auth_headers)
-        assert response.status_code == 200
-
-        data = response.json()
-        assert len(data["data"]) == 3
-
-    def test_list_attempts_empty(self, client: TestClient, auth_headers: dict):
-        """Пустой список попыток."""
-        response = client.get("/api/v1/attempts", headers=auth_headers)
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["data"] == []
-        assert data["meta"]["total"] == 0
 
 
 class TestStatsAPI:
@@ -142,20 +123,6 @@ class TestStatsAPI:
         )
         assert response.status_code == 400
 
-    def test_failures_stats(self, client: TestClient, sample_attempts: list, auth_headers: dict):
-        """Получение статистики ошибок."""
-        from_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        to_date = datetime.utcnow().isoformat()
-
-        response = client.get(
-            f"/api/v1/stats/failures?from={from_date}&to={to_date}&group_by=type",
-            headers=auth_headers
-        )
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["group_by"] == "type"
-        assert len(data["data"]) > 0
 
     def test_geography_stats(self, client: TestClient, sample_sessions: list, auth_headers: dict):
         """Получение статистики по геолокации."""

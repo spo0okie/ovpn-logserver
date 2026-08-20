@@ -16,10 +16,8 @@
 | `GET /api/v1/sessions` | журнал сессий |
 | `GET /api/v1/sessions/active` | активные сессии |
 | `GET /api/v1/sessions/{session_id}` | детали сессии |
-| `GET /api/v1/attempts` | неудачные попытки (⚠️ всегда пусто, см. [known-gaps.md](known-gaps.md)) |
 | `GET /api/v1/stats/overview` | сводные метрики |
 | `GET /api/v1/stats/connections` | подключения по периодам |
-| `GET /api/v1/stats/failures` | статистика отказов |
 | `GET /api/v1/stats/geography` | распределение по странам |
 | `GET /health` | проверка живости, без аутентификации |
 

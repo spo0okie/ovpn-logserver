@@ -212,37 +212,6 @@ class AccountSessionsResponse(BaseModel):
 
 
 # =============================================================================
-# Connection Attempt схемы
-# =============================================================================
-
-class AttemptAccountInfo(BaseModel):
-    """Информация об аккаунте в попытке подключения."""
-
-    cn: Optional[str] = None
-    prefix: Optional[str] = None
-
-
-class AttemptListItem(BaseModel):
-    """Элемент списка попыток подключения."""
-
-    id: int
-    account: AttemptAccountInfo
-    attempted_at: datetime
-    source_ip: str
-    cert_cn: Optional[str] = None
-    failure_reason: str
-    failure_type: str
-    details: Optional[str] = None
-
-
-class AttemptListResponse(BaseModel):
-    """Ответ списка попыток подключения."""
-
-    data: List[AttemptListItem]
-    meta: PaginationMeta
-
-
-# =============================================================================
 # Statistics схемы
 # =============================================================================
 
@@ -266,19 +235,11 @@ class SessionsStats(BaseModel):
     this_month: int
 
 
-class AttemptsStats(BaseModel):
-    """Статистика попыток."""
-
-    failed_today: int
-    failed_this_week: int
-
-
 class OverviewStats(BaseModel):
     """Общая статистика."""
 
     accounts: AccountsStats
     sessions: SessionsStats
-    attempts: AttemptsStats
 
 
 class ConnectionPeriodStats(BaseModel):
