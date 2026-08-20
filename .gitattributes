@@ -1,0 +1,28 @@
+# Проект разворачивается на Linux, поэтому в репозитории и в рабочем дереве
+# держим LF независимо от платформы разработчика.
+#
+# Зачем это критично: у скриптов с CRLF шебанг превращается в
+# "#!/usr/bin/env python3\r", ядро ищет интерпретатор "python3\r" и не находит.
+# Для хуков OpenVPN это означает ненулевой код возврата из client-connect —
+# то есть отказ в подключении ВСЕМ клиентам (инвариант I4.5).
+# Ровно так CRLF однажды и попал в collector/openvpn_scripts/client-connect.
+
+* text=auto eol=lf
+
+# Исполняемые файлы без расширения — на всякий случай явно
+collector/openvpn_scripts/client-connect     text eol=lf
+collector/openvpn_scripts/client-disconnect  text eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Бинарные — не трогать
+*.png binary
+*.jpg binary
+*.db  binary
+*.key binary
+*.crt binary
+*.pem binary

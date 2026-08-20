@@ -29,7 +29,7 @@ def run_docker_compose_cmd(cmd: list, cwd: str = None) -> subprocess.CompletedPr
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     docker_compose_file = os.path.join(project_root, "docker", "docker-compose.yml")
     
-    full_cmd = ["docker-compose", "-f", docker_compose_file] + cmd
+    full_cmd = ["docker", "compose", "-f", docker_compose_file] + cmd
     return subprocess.run(
         full_cmd, 
         cwd=cwd or project_root, 
@@ -72,9 +72,13 @@ def clean_docker_state(docker_compose_project):
     # Очищаем тестовые данные в БД
     try:
         cleanup_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", """
-                DELETE FROM sessions WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+            ["docker", "exec",
+             "-e", f"MYSQL_PWD={os.environ.get('MYSQL_PASSWORD', 'openvpn_password')}",
+             "openvpn-mysql", "mysql",
+             f"-u{os.environ.get('MYSQL_USER', 'openvpn')}",
+             os.environ.get("MYSQL_DATABASE", "openvpn_logs"), "-e", """
+                DELETE s FROM sessions s JOIN accounts a ON a.id = s.account_id
+                WHERE a.cn LIKE '%_e2e' OR a.cn LIKE 'test_%'
              """],
             capture_output=True,
             text=True,
@@ -82,8 +86,11 @@ def clean_docker_state(docker_compose_project):
         )
         # Также очищаем тестовые аккаунты
         subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", """
+            ["docker", "exec",
+             "-e", f"MYSQL_PWD={os.environ.get('MYSQL_PASSWORD', 'openvpn_password')}",
+             "openvpn-mysql", "mysql",
+             f"-u{os.environ.get('MYSQL_USER', 'openvpn')}",
+             os.environ.get("MYSQL_DATABASE", "openvpn_logs"), "-e", """
                 DELETE FROM accounts WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
              """],
             capture_output=True,
@@ -100,17 +107,24 @@ def clean_docker_state(docker_compose_project):
     # Очищаем после теста
     try:
         subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", """
-                DELETE FROM sessions WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
+            ["docker", "exec",
+             "-e", f"MYSQL_PWD={os.environ.get('MYSQL_PASSWORD', 'openvpn_password')}",
+             "openvpn-mysql", "mysql",
+             f"-u{os.environ.get('MYSQL_USER', 'openvpn')}",
+             os.environ.get("MYSQL_DATABASE", "openvpn_logs"), "-e", """
+                DELETE s FROM sessions s JOIN accounts a ON a.id = s.account_id
+                WHERE a.cn LIKE '%_e2e' OR a.cn LIKE 'test_%'
              """],
             capture_output=True,
             text=True,
             timeout=10
         )
         subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", """
+            ["docker", "exec",
+             "-e", f"MYSQL_PWD={os.environ.get('MYSQL_PASSWORD', 'openvpn_password')}",
+             "openvpn-mysql", "mysql",
+             f"-u{os.environ.get('MYSQL_USER', 'openvpn')}",
+             os.environ.get("MYSQL_DATABASE", "openvpn_logs"), "-e", """
                 DELETE FROM accounts WHERE cn LIKE '%_e2e' OR cn LIKE 'test_%'
              """],
             capture_output=True,

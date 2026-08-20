@@ -240,6 +240,10 @@ class VPNSimulator:
             account = create_or_get_account(self.db, cn)
             geo = resolve_geoip(source_ip, self.db)
             create_session(self.db, account.id, env_vars, geo)
+            # create_session только flush'ит — коммитит вызывающий (в проде это
+            # client_connect). Симулятор играет его роль, поэтому коммитит сам,
+            # иначе API в своей сессии данных не увидит.
+            self.db.commit()
         
         return self._connected_users[cn]
     

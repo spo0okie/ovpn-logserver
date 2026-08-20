@@ -19,6 +19,10 @@
 
 # Настройки PKI
 PKI_DIR="/etc/openvpn/pki"
+# easy-rsa при init-pki делает hard reset — удаляет свой каталог целиком.
+# Точку монтирования тома снести нельзя ("Resource busy"), поэтому PKI
+# живёт в подкаталоге тома, а не в его корне.
+EASYRSA_PKI_DIR="$PKI_DIR/easyrsa"
 EASYRSA_DIR="/usr/share/easy-rsa"
 CERTS_DIR="/etc/openvpn/certs"
 CCD_DIR="/etc/openvpn/ccd"
@@ -52,6 +56,13 @@ generate_pki() {
     # Инициализируем PKI в неинтерактивном режиме
     export EASYRSA_BATCH=1
     export EASYRSA_SKIP_CONFIRM=1
+
+    # ВАЖНО: без EASYRSA_PKI easyrsa создаёт pki относительно своего каталога
+    # (/usr/share/easy-rsa/pki), то есть ВНЕ тома openvpn_pki. Проверка
+    # «PKI уже существует» смотрит в $PKI_DIR и всегда срабатывала как
+    # «нет PKI» — каждое пересоздание контейнера выпускало новый CA, тогда как
+    # клиентские сертификаты в томе оставались от старого.
+    export EASYRSA_PKI="$EASYRSA_PKI_DIR"
     
     log "Initializing PKI..."
     ./easyrsa init-pki || { log "ERROR: Failed to init PKI"; return 1; }
@@ -87,35 +98,49 @@ EOF
     # Вместо DH параметров используем ECDH для ускорения генерации
     # ECDH с prime256v1 генерируется мгновенно (вместо >2 минут для DH 2048-bit)
     log "Generating ECDH parameters (quick)..."
-    openssl ecparam -name prime256v1 -genkey -noout -out /etc/openvpn/ecdh.key 2>/dev/null || true
-    openssl ecparam -name prime256v1 -out /etc/openvpn/ecdh.pem 2>/dev/null || true
-    
-    # Копируем файлы в нужные места
-    log "Copying certificates to OpenVPN directory..."
-    cp "$EASYRSA_DIR/pki/ca.crt" /etc/openvpn/ || { log "ERROR: Failed to copy ca.crt"; return 1; }
-    cp "$EASYRSA_DIR/pki/issued/server.crt" /etc/openvpn/ || { log "ERROR: Failed to copy server.crt"; return 1; }
-    cp "$EASYRSA_DIR/pki/private/server.key" /etc/openvpn/ || { log "ERROR: Failed to copy server.key"; return 1; }
-    
-    # Копируем CRL если существует
-    if [ -f "$EASYRSA_DIR/pki/crl.pem" ]; then
-        cp "$EASYRSA_DIR/pki/crl.pem" /etc/openvpn/ || { log "WARNING: Failed to copy crl.pem"; }
-    fi
-    
-    # Копируем клиентские сертификаты в общую директорию
-    cp "$EASYRSA_DIR/pki/ca.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client ca.crt"; }
-    cp "$EASYRSA_DIR/pki/issued/test-client.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client cert"; }
-    cp "$EASYRSA_DIR/pki/private/test-client.key" "$CERTS_DIR/" || { log "WARNING: Failed to copy client key"; }
-    
-    # Создаем ta.key для tls-auth
+    openssl ecparam -name prime256v1 -genkey -noout -out "$PKI_DIR/ecdh.key" 2>/dev/null || true
+    openssl ecparam -name prime256v1 -out "$PKI_DIR/ecdh.pem" 2>/dev/null || true
+
+    # ta.key для tls-auth храним в томе: /etc/openvpn — обычная файловая
+    # система контейнера, она исчезает при пересоздании, а PKI остаётся.
     log "Generating ta.key for TLS auth..."
-    openvpn --genkey secret /etc/openvpn/ta.key || { log "ERROR: Failed to generate ta.key"; return 1; }
-    cp /etc/openvpn/ta.key "$CERTS_DIR/" || { log "WARNING: Failed to copy ta.key to CERTS_DIR"; }
-    
-    # Устанавливаем права
+    openvpn --genkey secret "$PKI_DIR/ta.key" || { log "ERROR: Failed to generate ta.key"; return 1; }
+
+    log "PKI generation completed!"
+    return 0
+}
+
+# Раскладывает артефакты из тома по рабочим каталогам.
+# Вызывается ВСЕГДА, а не только после генерации: /etc/openvpn и $CERTS_DIR
+# живут в файловой системе контейнера и пропадают при его пересоздании, тогда
+# как PKI в томе сохраняется. Без этого шага пересозданный контейнер падал с
+# "Cannot pre-load keyfile (/etc/openvpn/ta.key)".
+install_certs_from_pki() {
+    log "Installing certificates from PKI volume..."
+
+    cp "$EASYRSA_PKI_DIR/ca.crt" /etc/openvpn/ || { log "ERROR: Failed to copy ca.crt"; return 1; }
+    cp "$EASYRSA_PKI_DIR/issued/server.crt" /etc/openvpn/ || { log "ERROR: Failed to copy server.crt"; return 1; }
+    cp "$EASYRSA_PKI_DIR/private/server.key" /etc/openvpn/ || { log "ERROR: Failed to copy server.key"; return 1; }
+    cp "$PKI_DIR/ta.key" /etc/openvpn/ || { log "ERROR: Failed to copy ta.key"; return 1; }
+
+    [ -f "$PKI_DIR/ecdh.pem" ] && cp "$PKI_DIR/ecdh.pem" /etc/openvpn/ 2>/dev/null
+    [ -f "$PKI_DIR/ecdh.key" ] && cp "$PKI_DIR/ecdh.key" /etc/openvpn/ 2>/dev/null
+
+    if [ -f "$EASYRSA_PKI_DIR/crl.pem" ]; then
+        cp "$EASYRSA_PKI_DIR/crl.pem" /etc/openvpn/ || { log "WARNING: Failed to copy crl.pem"; }
+    fi
+
+    # Клиентские сертификаты — в общий том с openvpn-client
+    mkdir -p "$CERTS_DIR"
+    cp "$EASYRSA_PKI_DIR/ca.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client ca.crt"; }
+    cp "$EASYRSA_PKI_DIR/issued/test-client.crt" "$CERTS_DIR/" || { log "WARNING: Failed to copy client cert"; }
+    cp "$EASYRSA_PKI_DIR/private/test-client.key" "$CERTS_DIR/" || { log "WARNING: Failed to copy client key"; }
+    cp "$PKI_DIR/ta.key" "$CERTS_DIR/" || { log "WARNING: Failed to copy ta.key to CERTS_DIR"; }
+
     chmod 755 "$CERTS_DIR" 2>/dev/null || true
     chmod 644 "$CERTS_DIR"/* 2>/dev/null || true
-    
-    log "PKI generation completed!"
+
+    log "Certificates installed"
     return 0
 }
 
@@ -165,6 +190,25 @@ EOF
     
     chmod 644 "$CCD_DIR/test-client"
     log "CCD file created"
+}
+
+# Функция обновления CRL
+refresh_crl_if_stale() {
+    # CRL, выпущенный easy-rsa, имеет срок годности (EASYRSA_CRL_DAYS, по
+    # умолчанию 180 дней). Если его не обновлять, по истечении срока OpenVPN
+    # начнёт отклонять ВСЕХ клиентов — отказ выглядит как проблема с
+    # сертификатами и долго диагностируется. Обновляем не чаще раза в сутки.
+    crl_file="/etc/openvpn/crl.pem"
+
+    if [ -f "$crl_file" ] && [ -z "$(find "$crl_file" -mtime +1 2>/dev/null)" ]; then
+        return 0
+    fi
+
+    if (cd "$EASYRSA_DIR" && EASYRSA_BATCH=1 EASYRSA_PKI="$EASYRSA_PKI_DIR" ./easyrsa gen-crl >/dev/null 2>&1); then
+        cp "$EASYRSA_PKI_DIR/crl.pem" "$crl_file" 2>/dev/null && log "CRL refreshed"
+    else
+        log "WARNING: CRL refresh failed"
+    fi
 }
 
 # Функция проверки/создания TUN устройства
@@ -233,7 +277,7 @@ main() {
     }
     
     # Проверяем, существует ли уже PKI
-    if [ ! -f "$PKI_DIR/ca.crt" ]; then
+    if [ ! -f "$EASYRSA_PKI_DIR/ca.crt" ]; then
         log "PKI not found, generating new PKI..."
         generate_pki || {
             log "ERROR: PKI generation failed"
@@ -247,7 +291,14 @@ main() {
             create_ccd_file
         fi
     fi
-    
+
+    # Раскладываем сертификаты из тома в рабочие каталоги — на каждом старте,
+    # т.к. /etc/openvpn не переживает пересоздание контейнера (см. функцию).
+    install_certs_from_pki || {
+        log "ERROR: Failed to install certificates from PKI"
+        exit 1
+    }
+
     # Ждем MySQL
     wait_for_mysql
     
@@ -269,6 +320,7 @@ main() {
         (
             while true; do
                 sleep "$SYNC_INTERVAL"
+                refresh_crl_if_stale
                 python3 /app/collector/sync_all.py \
                     >> /var/log/openvpn-logserver/sync.log 2>&1 \
                     || log "sync_all завершился с ошибкой (см. sync.log)"

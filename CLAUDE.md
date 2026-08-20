@@ -61,6 +61,8 @@ alembic -c database/alembic.ini revision -m "описание"
 - **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. E2E в Docker — единственная проверка на реальном MySQL.
 - **Время**: в коде исторически смешаны naive `datetime.utcnow()` и aware `datetime.now(timezone.utc)` — сравнение их кидает `TypeError`. При правках придерживаться стиля окружающего кода, отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
 - **Прямой вызов функций API из UI-роутов**: FastAPI не применяет `Query(...)` — незаданные аргументы приходят объектами `Query`, а не значениями по умолчанию, и попадают в SQL. Передавать все параметры явно (см. `web/routes/pages.py`).
+- **Переводы строк**: исполняемые файлы (`collector/openvpn_scripts/*`, `docker/**/entrypoint.sh`) обязаны быть в LF. При CRLF шебанг превращается в `#!/usr/bin/env python3`, интерпретатор не находится, хук возвращает ненулевой код и OpenVPN отказывает клиентам. Защита — `.gitattributes` с `* text=auto eol=lf`; при записи файлов из Python указывать `newline='
+'`.
 - **Паттерн тестовых conftest**: `DATABASE_URL` и auth-ENV выставляются ДО импорта `web.main`/`core.database`, затем `reload_config()` — иначе закешируется реальный конфиг.
 
 ## Документация

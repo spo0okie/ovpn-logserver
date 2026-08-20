@@ -186,7 +186,15 @@
             columns: [
                 { data: 'id', name: 'id', orderable: true },
                 { data: 'account_cn', name: 'account', orderable: true },
-                { data: 'connected_at', name: 'connected', orderable: true },
+                // Показываем connected_at_local — время в зоне сервера, как на
+                // остальных страницах. Само connected_at приходит в UTC и
+                // используется для сортировки/фильтрации на сервере.
+                { data: 'connected_at', name: 'connected', orderable: true, render: function(data, type, row) {
+                    if (type !== 'display') {
+                        return data;
+                    }
+                    return row.connected_at_local || data || '-';
+                }},
                 { data: 'duration_seconds', name: 'duration', orderable: false },
                 { data: 'source_ip', name: 'source_ip', orderable: true },
                 { data: 'geo.country', name: 'location', orderable: true, render: function(data, type, row) {

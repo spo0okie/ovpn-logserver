@@ -257,7 +257,10 @@ def close_orphaned_session(db, session: Session):
     """
     session.status = 'error'
     session.disconnected_at = datetime.utcnow()
-    db.commit()
+    # flush, а не commit: закрытие orphaned и создание новой сессии должны быть
+    # одной транзакцией, иначе при сбое между ними остаётся состояние
+    # «старая закрыта, новая не создана». Коммитит вызывающий client_connect().
+    db.flush()
 
     logger.info(
         f"Orphaned session closed: session_id={session.id}, "
@@ -327,7 +330,7 @@ def create_session(db, account_id: int, env_vars: dict, geo: dict):
     )
 
     db.add(session)
-    db.commit()
+    db.flush()  # коммит делает вызывающий — см. close_orphaned_session
 
     logger.info(
         f"Session created: account_id={account_id}, "
@@ -392,12 +395,9 @@ def client_connect(db_session=None):
             env_vars.get('serial_number', 'unknown')
         )
 
-        # C5.1-C5.4: Проверяем и закрываем orphaned сессии перед созданием новой
-        closed_count = close_orphaned_sessions(db, account.id)
-        if closed_count > 0:
-            logger.info(f"Found and closed {closed_count} orphaned sessions for CN='{env_vars['common_name']}'")
-
-        # I4.4: Получаем геолокацию
+        # I4.4: Геолокация запрашивается ДО работы с сессиями: resolve_geoip
+        # пишет кэш и коммитит переданную сессию БД, а это разорвало бы
+        # транзакцию закрытия orphaned + создания новой.
         logger.debug(f"Resolving GeoIP for {env_vars['trusted_ip']}")
         geo = resolve_geoip(env_vars['trusted_ip'], db)
         if geo:
@@ -405,13 +405,27 @@ def client_connect(db_session=None):
         else:
             logger.warning(f"Could not resolve GeoIP for {env_vars['trusted_ip']}")
 
-        # I4.3, I4.6: Создаем сессию со статусом active
+        # C5.1-C5.4 и I4.3 в ОДНОЙ транзакции: либо старые сессии закрыты и
+        # новая создана, либо не изменилось ничего.
+        closed_count = close_orphaned_sessions(db, account.id)
+        if closed_count > 0:
+            logger.info(f"Found and closed {closed_count} orphaned sessions for CN='{env_vars['common_name']}'")
+
         create_session(db, account.id, env_vars, geo)
+        db.commit()
 
         logger.info("Client-connect completed successfully")
         return 0
 
     except Exception as e:
+        # Явный откат: незакоммиченные изменения (закрытие orphaned, новая
+        # сессия) должны исчезнуть целиком. Без него они остаются в переданной
+        # извне сессии БД и могут уехать в базу с чужим коммитом.
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Rollback failed: {rollback_error}")
         # I4.5: При любой ошибке возвращаем 0, не блокируем VPN
         logger.exception(f"Error in client_connect: {e}")
         return 0

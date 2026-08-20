@@ -18,6 +18,7 @@ from sqlalchemy import or_, func
 
 from core.models import Account, Session as SessionModel
 from web.dependencies import get_db
+from web.utils.timezone import format_datetime
 from web.schemas import (
     SessionListResponse,
     SessionDetail,
@@ -40,6 +41,12 @@ def _session_to_list_item(session: SessionModel, account_cn: str) -> dict:
         "account_cn": account_cn,
         "connected_at": session.connected_at,
         "disconnected_at": session.disconnected_at,
+        # Предформатированное локальное время: таблица сессий рендерится
+        # клиентским DataTables через AJAX, куда Jinja-фильтр local_datetime
+        # не достаёт. Форматируем тем же способом, что и остальные страницы,
+        # чтобы зона везде была одна — серверная (см. docs/timezone.md).
+        "connected_at_local": format_datetime(session.connected_at) if session.connected_at else None,
+        "disconnected_at_local": format_datetime(session.disconnected_at) if session.disconnected_at else None,
         "duration_seconds": duration,
         "source_ip": session.source_ip,
         "geo": {

@@ -133,6 +133,10 @@ class SessionListItem(BaseModel):
     account_cn: str
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
+    # Готовые к показу строки в часовом поясе сервера — для клиентских таблиц,
+    # где серверный Jinja-фильтр неприменим (см. docs/timezone.md)
+    connected_at_local: Optional[str] = None
+    disconnected_at_local: Optional[str] = None
     duration_seconds: Optional[int] = None
     source_ip: str
     geo: GeoInfo

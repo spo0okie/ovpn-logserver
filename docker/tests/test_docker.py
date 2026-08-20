@@ -157,7 +157,7 @@ def wait_for_web(timeout: int = 60) -> bool:
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = requests.get("http://localhost:8000/health", timeout=2)
+            response = requests.get("http://localhost:8001/health", timeout=2)
             if response.status_code == 200:
                 return True
         except requests.RequestException:
@@ -185,7 +185,7 @@ class TestI91_ComposeUp:
     def test_compose_config_valid(self, project_root: str):
         """Проверяет что конфигурация docker-compose валидна."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "config"],
+            ["docker", "compose", "config"],
             cwd=project_root
         )
         assert code == 0, f"Invalid docker-compose config: {stderr}"
@@ -195,7 +195,7 @@ class TestI91_ComposeUp:
         """Проверяет что MySQL сервис запускается."""
         # Запускаем только MySQL
         code, stdout, stderr = run_command(
-            ["docker-compose", "up", "-d", "mysql"],
+            ["docker", "compose", "up", "-d", "mysql"],
             cwd=project_root,
             timeout=120
         )
@@ -209,7 +209,7 @@ class TestI91_ComposeUp:
         """Проверяет что Web сервис запускается."""
         # Запускаем web (зависит от mysql)
         code, stdout, stderr = run_command(
-            ["docker-compose", "up", "-d", "web"],
+            ["docker", "compose", "up", "-d", "web"],
             cwd=project_root,
             timeout=120
         )
@@ -222,7 +222,7 @@ class TestI91_ComposeUp:
     def test_openvpn_server_starts(self, project_root: str):
         """Проверяет что OpenVPN сервер запускается."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "up", "-d", "openvpn-server"],
+            ["docker", "compose", "up", "-d", "openvpn-server"],
             cwd=project_root,
             timeout=120
         )
@@ -233,7 +233,7 @@ class TestI91_ComposeUp:
         
         # Проверяем что контейнер запущен
         code, stdout, stderr = run_command(
-            ["docker-compose", "ps", "-q", "openvpn-server"],
+            ["docker", "compose", "ps", "-q", "openvpn-server"],
             cwd=project_root
         )
         assert code == 0 and stdout.strip(), "OpenVPN server container is not running"
@@ -251,7 +251,7 @@ class TestI92_PkiGeneration:
         """Проверяет что CA сертификат создан."""
         # Проверяем в контейнере
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/ca.crt"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/easyrsa/ca.crt"],
             cwd=project_root
         )
         assert code == 0, "CA certificate not found"
@@ -260,7 +260,7 @@ class TestI92_PkiGeneration:
     def test_server_certificate_exists(self, project_root: str):
         """Проверяет что сертификат сервера создан."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/issued/server.crt"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/easyrsa/issued/server.crt"],
             cwd=project_root
         )
         assert code == 0, "Server certificate not found"
@@ -269,25 +269,31 @@ class TestI92_PkiGeneration:
     def test_server_key_exists(self, project_root: str):
         """Проверяет что ключ сервера создан."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/private/server.key"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/easyrsa/private/server.key"],
             cwd=project_root
         )
         assert code == 0, "Server key not found"
     
     @pytest.mark.integration
     def test_dh_params_exist(self, project_root: str):
-        """Проверяет что DH параметры созданы."""
+        """
+        Проверяет параметры Диффи-Хеллмана.
+
+        Стенд использует ECDH (prime256v1), а не классический DH: генерация
+        мгновенная вместо нескольких минут. Поэтому проверяем ecdh.pem,
+        файла dh.pem не существует и существовать не должно.
+        """
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/dh.pem"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/ecdh.pem"],
             cwd=project_root
         )
-        assert code == 0, "DH parameters not found"
+        assert code == 0, "ECDH parameters not found"
     
     @pytest.mark.integration
     def test_crl_exists(self, project_root: str):
         """Проверяет что CRL файл создан."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/pki/crl.pem"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/crl.pem"],
             cwd=project_root
         )
         assert code == 0, "CRL file not found"
@@ -296,7 +302,7 @@ class TestI92_PkiGeneration:
     def test_ta_key_exists(self, project_root: str):
         """Проверяет что TLS-auth ключ создан."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/ta.key"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/ta.key"],
             cwd=project_root
         )
         assert code == 0, "TA key not found"
@@ -305,7 +311,7 @@ class TestI92_PkiGeneration:
     def test_client_certificate_exists(self, project_root: str):
         """Проверяет что клиентский сертификат создан."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/certs/test-client.crt"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "test", "-f", "/etc/openvpn/certs/test-client.crt"],
             cwd=project_root
         )
         assert code == 0, "Client certificate not found"
@@ -314,7 +320,7 @@ class TestI92_PkiGeneration:
     def test_certificates_shared_via_volume(self, project_root: str):
         """Проверяет что сертификаты доступны через volume."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "ls", "-la", "/etc/openvpn/certs/"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "ls", "-la", "/etc/openvpn/certs/"],
             cwd=project_root
         )
         assert code == 0, "Certs directory not accessible"
@@ -333,7 +339,7 @@ class TestI93_ClientConnection:
     def test_openvpn_port_listening(self, project_root: str):
         """Проверяет что OpenVPN сервер слушает порт 1194."""
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-server", "netstat", "-uln"],
+            ["docker", "compose", "exec", "-T", "openvpn-server", "netstat", "-uln"],
             cwd=project_root
         )
         # Проверяем что порт 1194 открыт
@@ -344,7 +350,7 @@ class TestI93_ClientConnection:
         """Проверяет что клиентский контейнер запускается."""
         # Запускаем клиента
         code, stdout, stderr = run_command(
-            ["docker-compose", "--profile", "client", "up", "-d", "openvpn-client"],
+            ["docker", "compose", "--profile", "client", "up", "-d", "openvpn-client"],
             cwd=project_root,
             timeout=120
         )
@@ -355,7 +361,7 @@ class TestI93_ClientConnection:
         
         # Проверяем что контейнер запущен
         code, stdout, stderr = run_command(
-            ["docker-compose", "ps", "-q", "openvpn-client"],
+            ["docker", "compose", "ps", "-q", "openvpn-client"],
             cwd=project_root
         )
         assert code == 0 and stdout.strip(), "OpenVPN client container is not running"
@@ -365,7 +371,7 @@ class TestI93_ClientConnection:
         """Проверяет что клиент получает сертификаты от сервера."""
         # Проверяем что сертификаты скопированы
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-client", "test", "-f", "/etc/openvpn/client/ca.crt"],
+            ["docker", "compose", "exec", "-T", "openvpn-client", "test", "-f", "/etc/openvpn/client/ca.crt"],
             cwd=project_root
         )
         assert code == 0, "Client did not receive CA certificate"
@@ -379,7 +385,7 @@ class TestI93_ClientConnection:
         """
         # Запускаем клиента с командой connect
         code, stdout, stderr = run_command(
-            ["docker-compose", "--profile", "client", "exec", "-d", "openvpn-client", "/entrypoint.sh", "connect"],
+            ["docker", "compose", "--profile", "client", "exec", "-d", "openvpn-client", "/entrypoint.sh", "connect"],
             cwd=project_root,
             timeout=60
         )
@@ -389,7 +395,7 @@ class TestI93_ClientConnection:
         
         # Проверяем что tun интерфейс создан
         code, stdout, stderr = run_command(
-            ["docker-compose", "exec", "-T", "openvpn-client", "ip", "link", "show", "tun0"],
+            ["docker", "compose", "exec", "-T", "openvpn-client", "ip", "link", "show", "tun0"],
             cwd=project_root
         )
         assert code == 0, "TUN interface not created, connection failed"
@@ -414,7 +420,7 @@ class TestI94_SessionCreation:
         
         # Запускаем клиента
         code, stdout, stderr = run_command(
-            ["docker-compose", "--profile", "client", "exec", "-d", "openvpn-client", "/entrypoint.sh", "connect"],
+            ["docker", "compose", "--profile", "client", "exec", "-d", "openvpn-client", "/entrypoint.sh", "connect"],
             cwd=project_root,
             timeout=60
         )
@@ -508,7 +514,7 @@ class TestI95_SessionClose:
         
         # Останавливаем клиента
         code, stdout, stderr = run_command(
-            ["docker-compose", "--profile", "client", "stop", "openvpn-client"],
+            ["docker", "compose", "--profile", "client", "stop", "openvpn-client"],
             cwd=project_root,
             timeout=60
         )
@@ -566,7 +572,7 @@ def cleanup_containers(project_root: str):
     
     # Останавливаем и удаляем контейнеры
     run_command(
-        ["docker-compose", "--profile", "client", "down", "-v"],
+        ["docker", "compose", "--profile", "client", "down", "-v"],
         cwd=project_root,
         timeout=120
     )

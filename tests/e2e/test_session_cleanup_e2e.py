@@ -64,7 +64,7 @@ def run_docker_compose_cmd(cmd: list, cwd: str = None) -> subprocess.CompletedPr
     Returns:
         Результат выполнения команды
     """
-    full_cmd = ["docker-compose", "-f", "docker/docker-compose.yml"] + cmd
+    full_cmd = ["docker", "compose", "-f", "docker/docker-compose.yml"] + cmd
     return subprocess.run(full_cmd, cwd=cwd or os.getcwd(), capture_output=True, text=True)
 
 

@@ -432,3 +432,101 @@ class TestGeoIPIntegration:
             assert session is not None
             assert session.country == 'US'
             assert session.city == 'Mountain View'
+
+
+class TestAtomicOrphanCloseAndCreate:
+    """
+    Закрытие orphaned-сессии и создание новой — одна транзакция.
+
+    Раньше каждый шаг коммитил сам, и сбой между ними оставлял состояние
+    «старая сессия закрыта, новая не создана» — пользователь пропадал из
+    списка активных, хотя подключение состоялось.
+    """
+
+    def test_failure_on_create_leaves_old_session_active(self, mocker, tmp_path):
+        """
+        Сбой при создании новой сессии не должен закрывать старую.
+
+        Используется отдельный engine, а не фикстура db: проверяется поведение
+        транзакции целиком (rollback), а фикстура работает внутри savepoint.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from collector import client_connect as cc
+        from core.database import Base
+        from core.models import Account, Session
+
+        engine = create_engine(f"sqlite:///{tmp_path}/atomic.db")
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        account = Account(cn="atomic_user", serial_number="900")
+        db.add(account)
+        db.commit()
+
+        old = Session(
+            account_id=account.id,
+            connected_at=datetime.utcnow() - timedelta(hours=1),
+            source_ip="10.0.0.1",
+            status='active',
+        )
+        db.add(old)
+        db.commit()
+        old_id = old.id
+
+        # Падение ровно между закрытием orphaned и коммитом
+        mocker.patch.object(cc, 'create_session', side_effect=RuntimeError("сбой БД"))
+
+        env = {
+            'common_name': 'atomic_user',
+            'trusted_ip': '10.0.0.2',
+            'tls_serial_0': '900',
+        }
+        with patch.dict(os.environ, env, clear=False):
+            result = cc.client_connect(db_session=db)
+
+        # I4.5: VPN не блокируем ни при каких обстоятельствах
+        assert result == 0
+
+        # Смотрим на состояние в БД через новую сессию
+        check = sessionmaker(bind=engine)()
+        stored = check.query(Session).filter(Session.id == old_id).one()
+        assert stored.status == 'active', (
+            "Старая сессия не должна оставаться закрытой, если новая не создана"
+        )
+        assert stored.disconnected_at is None
+        assert check.query(Session).count() == 1, "Новых сессий появиться не должно"
+
+        check.close()
+        db.close()
+        engine.dispose()
+
+    def test_success_closes_old_and_creates_new(self, db):
+        """Успешный сценарий: старая закрыта, новая активна — обе видны после коммита."""
+        from collector import client_connect as cc
+        from core.models import Account, Session
+
+        account = Account(cn="atomic_ok", serial_number="901")
+        db.add(account)
+        db.commit()
+
+        old = Session(
+            account_id=account.id,
+            connected_at=datetime.utcnow() - timedelta(hours=1),
+            source_ip="10.0.0.1",
+            status='active',
+        )
+        db.add(old)
+        db.commit()
+
+        env = {
+            'common_name': 'atomic_ok',
+            'trusted_ip': '10.0.0.3',
+            'tls_serial_0': '901',
+        }
+        with patch.dict(os.environ, env, clear=False):
+            assert cc.client_connect(db_session=db) == 0
+
+        sessions = db.query(Session).filter(Session.account_id == account.id).all()
+        statuses = sorted(s.status for s in sessions)
+        assert statuses == ['active', 'error'], f"Ожидались обе сессии, получено: {statuses}"
