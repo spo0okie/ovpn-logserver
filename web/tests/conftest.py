@@ -21,6 +21,11 @@ from core.config import reload_config  # noqa: E402
 reload_config()
 
 from core.database import Base, get_db  # noqa: E402
+# Роуты зависят от web.dependencies.get_db — это ДРУГОЙ объект функции, чем
+# core.database.get_db. FastAPI сопоставляет dependency_overrides по объекту,
+# поэтому подменять нужно обе зависимости, иначе роуты пойдут в модульный
+# engine (и при запуске всего набора тестов — не в тестовую БД).
+from web.dependencies import get_db as web_get_db  # noqa: E402
 from core.models import Account, Session as SessionModel, ConnectionAttempt  # noqa: E402
 from web.main import app  # noqa: E402
 
@@ -43,6 +48,7 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[web_get_db] = override_get_db
 
 
 @pytest.fixture(scope="function")
@@ -70,6 +76,7 @@ def client(db):
             pass
 
     app.dependency_overrides[get_db] = _get_db_override
+    app.dependency_overrides[web_get_db] = _get_db_override
 
     with TestClient(app) as c:
         yield c

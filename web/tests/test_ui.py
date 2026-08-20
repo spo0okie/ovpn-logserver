@@ -62,7 +62,7 @@ class TestI82Authentication:
     def test_dashboard_accessible_with_auth(self, client: TestClient, auth_headers: dict):
         """Dashboard доступен с аутентификацией."""
         # Создаем cookie для авторизации
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         client.cookies.set("auth", credentials)
         
         response = client.get("/")
@@ -71,7 +71,7 @@ class TestI82Authentication:
     
     def test_logout_clears_auth(self, client: TestClient, auth_headers: dict):
         """Logout очищает аутентификацию."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         client.cookies.set("auth", credentials)
         
         response = client.get("/logout", follow_redirects=False)
@@ -98,7 +98,7 @@ class TestI81OnlyAPI:
         1. Страницы рендерятся (даже если API недоступен)
         2. Нет прямого обращения к моделям БД из UI routes
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Запрашиваем страницу аккаунтов
         response = client.get(
@@ -118,7 +118,7 @@ class TestI81OnlyAPI:
         Это интеграционный тест: проверяем что данные на UI
         соответствуют данным из API.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         client.cookies.set("auth", credentials)
         
         # Получаем данные через API
@@ -126,8 +126,8 @@ class TestI81OnlyAPI:
         if api_response.status_code == 200:
             api_data = api_response.json()
             
-            # Получаем HTML страницу
-            page_response = client.get("/accounts")
+            # Получаем HTML страницу (с аутентификацией, иначе редирект на /login)
+            page_response = client.get("/accounts", headers=auth_headers)
             
             # Если страница загрузилась успешно
             if page_response.status_code == 200:
@@ -151,7 +151,7 @@ class TestI83DataConsistency:
         """
         Данные списка аккаунтов на UI соответствуют API.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Получаем данные через API
         api_response = client.get("/api/v1/accounts", headers=auth_headers)
@@ -189,7 +189,7 @@ class TestI83DataConsistency:
         """
         Данные деталей аккаунта на UI соответствуют API.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Получаем данные через API
         api_response = client.get(f"/api/v1/accounts/{sample_account.cn}", headers=auth_headers)
@@ -215,7 +215,7 @@ class TestI83DataConsistency:
         """
         Данные сессий на UI соответствуют API.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Получаем данные через API
         api_response = client.get("/api/v1/sessions", headers=auth_headers)
@@ -241,7 +241,7 @@ class TestI83DataConsistency:
         """
         Данные попыток на UI соответствуют API.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Получаем данные через API
         api_response = client.get("/api/v1/attempts", headers=auth_headers)
@@ -273,7 +273,7 @@ class TestI84Navigation:
         """
         Все ссылки навигации присутствуют на страницах.
         """
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Проверяем наличие навигации на Dashboard
         response = client.get(
@@ -293,7 +293,7 @@ class TestI84Navigation:
     
     def test_dashboard_link_works(self, client: TestClient, auth_headers: dict):
         """Ссылка на Dashboard работает."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         response = client.get(
             "/",
@@ -304,7 +304,7 @@ class TestI84Navigation:
     
     def test_accounts_link_works(self, client: TestClient, auth_headers: dict):
         """Ссылка на Accounts работает."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         response = client.get(
             "/accounts",
@@ -315,7 +315,7 @@ class TestI84Navigation:
     
     def test_sessions_link_works(self, client: TestClient, auth_headers: dict):
         """Ссылка на Sessions работает."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         response = client.get(
             "/sessions",
@@ -326,7 +326,7 @@ class TestI84Navigation:
     
     def test_attempts_link_works(self, client: TestClient, auth_headers: dict):
         """Ссылка на Attempts работает."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         response = client.get(
             "/attempts",
@@ -339,7 +339,7 @@ class TestI84Navigation:
         self, client: TestClient, sample_account: Account, auth_headers: dict
     ):
         """Ссылка на детали аккаунта из списка работает."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         # Получаем список аккаунтов
         list_response = client.get(
@@ -369,7 +369,7 @@ class TestI84Navigation:
     
     def test_breadcrumb_navigation(self, client: TestClient, sample_account: Account, auth_headers: dict):
         """Хлебные крошки работают корректно."""
-        credentials = base64.b64encode(b"admin:admin").decode()
+        credentials = base64.b64encode(b"admin:admin_password_123").decode()
         
         response = client.get(
             f"/accounts/{sample_account.cn}",
@@ -425,3 +425,47 @@ class TestLoginFlow:
         assert "<form" in content
         assert "username" in content
         assert "password" in content
+
+
+# =============================================================================
+# Регресс: страница деталей аккаунта в multi-cert модели
+# =============================================================================
+
+class TestAccountDetailMultiCert:
+    """
+    Шаблон account_detail.html читал плоские поля (account.id, valid_from,
+    is_revoked), которых нет в AccountDetail → блоки всегда показывали "-".
+    Проверяем, что реальные данные сертификата попадают на страницу.
+    """
+
+    def test_account_detail_page_renders_certificate_data(
+        self, client: TestClient, sample_account, auth_headers: dict
+    ):
+        response = client.get(f"/accounts/{sample_account.cn}", headers=auth_headers)
+        assert response.status_code == 200
+        content = response.text
+
+        # CN и серийник сертификата должны быть на странице
+        assert sample_account.cn in content
+        assert sample_account.serial_number[:12] in content
+        # Блок сертификатов отрисован, а не пустая заглушка
+        assert "No certificates found" not in content
+
+    def test_account_detail_page_does_not_500(
+        self, client: TestClient, sample_account, sample_sessions, auth_headers: dict
+    ):
+        """Страница с сессиями не падает (регресс на Query-дефолты в прямом вызове API)."""
+        response = client.get(f"/accounts/{sample_account.cn}", headers=auth_headers)
+        assert response.status_code == 200
+
+
+class TestPaginationClamp:
+    """UI-роуты вызывают функции API напрямую, минуя Query(le=100) — нужен свой cap."""
+
+    def test_per_page_is_clamped_on_ui_route(self, client: TestClient, auth_headers: dict):
+        response = client.get("/accounts?per_page=100000", headers=auth_headers)
+        assert response.status_code == 200
+
+    def test_negative_page_does_not_break(self, client: TestClient, auth_headers: dict):
+        response = client.get("/accounts?page=-5&per_page=0", headers=auth_headers)
+        assert response.status_code == 200

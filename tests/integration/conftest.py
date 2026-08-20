@@ -20,21 +20,21 @@ from sqlalchemy.orm import sessionmaker, Session
 # Добавляем корневую директорию проекта в путь
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-# Устанавливаем тестовую БД ДО импорта core.database
+# Устанавливаем тестовую БД ДО импорта core.database.
+# Корневой conftest.py уже выставил безопасный SQLite-дефолт, поэтому боевой
+# конфиг сюда не попадёт даже если core.database импортирован раньше.
 TEST_DATABASE_URL = "sqlite:///./test_integration.db"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
-# Перезагружаем модули чтобы применить новый DATABASE_URL
-import importlib
-if 'core.database' in sys.modules:
-    importlib.reload(sys.modules['core.database'])
-if 'web.dependencies' in sys.modules:
-    importlib.reload(sys.modules['web.dependencies'])
-if 'web.main' in sys.modules:
-    importlib.reload(sys.modules['web.main'])
+# ВАЖНО: здесь раньше был importlib.reload(core.database / web.dependencies /
+# web.main). Reload создаёт НОВЫЕ объекты функций get_db и НОВЫЙ app, из-за чего
+# dependency_overrides, зарегистрированные в web/tests, переставали действовать —
+# полный прогон падал, хотя пакеты по отдельности проходили. Вместо reload
+# тесты работают со своим engine и подменяют зависимости FastAPI (см. ниже).
 
 from core.database import Base, get_db, SessionLocal, engine as core_engine
 from core.models import Account, Session as SessionModel, ConnectionAttempt
+from web.dependencies import get_db as web_get_db
 from web.main import app
 from collector.client_connect import client_connect as collector_client_connect
 from collector.client_disconnect import client_disconnect as collector_client_disconnect
@@ -70,8 +70,25 @@ def engine():
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
-    
+
+    # Часть тестов (параллельные подключения, resilience) берёт сессию прямо из
+    # core.database.SessionLocal в рантайме. Модульные engine/SessionLocal
+    # создаются на этапе импорта и могут указывать на чужую тестовую БД, если
+    # core.database импортирован раньше этого conftest. Перепривязываем их к
+    # интеграционному engine — в отличие от importlib.reload это не создаёт
+    # новых объектов функций/app и не ломает dependency_overrides в web-тестах.
+    import core.database as core_db
+
+    original_engine = core_db.engine
+    original_session_local = core_db.SessionLocal
+
+    core_db.engine = engine
+    core_db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
     yield engine
+
+    core_db.engine = original_engine
+    core_db.SessionLocal = original_session_local
     engine.dispose()
 
 
@@ -137,11 +154,14 @@ def api_client(engine, tables):
         finally:
             pass
     
+    # Роуты зависят от web.dependencies.get_db — это другой объект функции,
+    # чем core.database.get_db; FastAPI сопоставляет подмены по объекту.
     app.dependency_overrides[get_db] = _get_db_override
-    
+    app.dependency_overrides[web_get_db] = _get_db_override
+
     with TestClient(app) as client:
         yield client
-    
+
     app.dependency_overrides.clear()
     db.close()
 
@@ -485,7 +505,8 @@ def restart_services(db, api_client):
                 pass
         
         app.dependency_overrides[get_db] = _get_db_override
-        
+        app.dependency_overrides[web_get_db] = _get_db_override
+
         return True
-    
+
     return _restart

@@ -12,6 +12,7 @@ Plaintext-поле `password` поддерживается как legacy с depr
 import json
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -32,18 +33,50 @@ SESSION_LIFETIME_SECONDS = 3600
 
 os.makedirs(SESSION_DIR, exist_ok=True)
 
+# session_id всегда генерируется как uuid4. Строго валидируем формат ДО
+# построения пути к файлу — иначе cookie вида "../../etc/foo" даёт path
+# traversal и удаление произвольных .json-файлов (validate/delete_session).
+_SESSION_ID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
-def create_session(username: str) -> str:
+
+def _is_valid_session_id(session_id: str) -> bool:
+    if not session_id or not _SESSION_ID_RE.match(session_id):
+        return False
+    try:
+        uuid.UUID(session_id)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def create_session(username: str, lifetime_seconds: int = SESSION_LIFETIME_SECONDS) -> str:
+    # Оппортунистически чистим протухшие сессии при логине — иначе каталог
+    # sessions/ растёт неограниченно (протухший файл удаляется только если по
+    # его ID придёт запрос). Логин нечаст, накладные расходы незначительны.
+    try:
+        cleanup_expired_sessions()
+    except Exception as exc:  # чистка не должна мешать логину
+        logger.debug("[AUTH] cleanup_expired_sessions failed: %s", exc)
+
     session_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
     with open(session_file, "w") as f:
-        json.dump({"username": username, "created_at": now, "last_used": now}, f)
+        # lifetime хранится в самой сессии, чтобы "remember me" реально работал
+        # (раньше сервер резал любую сессию по глобальным 3600с независимо от
+        # max_age cookie).
+        json.dump({
+            "username": username,
+            "created_at": now,
+            "last_used": now,
+            "lifetime": int(lifetime_seconds),
+        }, f)
     return session_id
 
 
 def validate_session(session_id: str) -> Optional[str]:
-    if not session_id:
+    if not _is_valid_session_id(session_id):
         return None
 
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
@@ -62,8 +95,9 @@ def validate_session(session_id: str) -> Optional[str]:
             pass
         return None
 
+    lifetime = data.get("lifetime", SESSION_LIFETIME_SECONDS)
     elapsed = (datetime.now(timezone.utc) - last_used).total_seconds()
-    if elapsed > SESSION_LIFETIME_SECONDS:
+    if elapsed > lifetime:
         try:
             os.remove(session_file)
         except OSError:
@@ -81,6 +115,8 @@ def validate_session(session_id: str) -> Optional[str]:
 
 
 def delete_session(session_id: str) -> bool:
+    if not _is_valid_session_id(session_id):
+        return False
     session_file = os.path.join(SESSION_DIR, f"{session_id}.json")
     if not os.path.exists(session_file):
         return False
@@ -108,7 +144,8 @@ def cleanup_expired_sessions() -> int:
             with open(path, "r") as f:
                 data = json.load(f)
             last_used = datetime.fromisoformat(data["last_used"])
-            if (now - last_used).total_seconds() > SESSION_LIFETIME_SECONDS:
+            lifetime = data.get("lifetime", SESSION_LIFETIME_SECONDS)
+            if (now - last_used).total_seconds() > lifetime:
                 os.remove(path)
                 expired += 1
         except (json.JSONDecodeError, IOError, KeyError, ValueError):

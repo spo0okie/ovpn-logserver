@@ -26,6 +26,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.x509.oid import NameOID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from core.database import SessionLocal
 from core.models import Account
@@ -189,7 +190,83 @@ def find_cert_files(certs_dir: str) -> list:
     cert_files = list(certs_path.glob(f"*{CERT_EXTENSION}"))
     logger.debug(f"Found {len(cert_files)} certificate files in {certs_dir}")
 
+    if not cert_files:
+        # Каталог есть, но подходящих файлов нет. Чаще всего это опечатка в
+        # путях/расширении: синк молча превращается в no-op, даты сертификатов
+        # никогда не заполняются, и заметить это можно только по пустым
+        # valid_to в БД. Поэтому логируем громко и показываем, что реально
+        # лежит в каталоге.
+        present = sorted({
+            (f.suffix or "<без расширения>")
+            for f in certs_path.iterdir() if f.is_file()
+        })
+        if present:
+            logger.error(
+                "cert_sync: в %s нет ни одного файла '%s'. "
+                "Найденные расширения: %s. Похоже на неверный certs_dir/"
+                "cert_extension — синхронизация сертификатов не выполняется.",
+                certs_dir, CERT_EXTENSION, ", ".join(present),
+            )
+        else:
+            logger.warning("cert_sync: каталог %s пуст", certs_dir)
+
     return [str(f) for f in cert_files]
+
+
+def _upsert_account(db, cert_info: dict, stats: dict) -> None:
+    """Создаёт или обновляет account по паре (cn, serial_number), коммитит.
+
+    Коммит выполняется здесь, чтобы конфликт одной записи не откатывал батч.
+    """
+    existing = db.query(Account).filter_by(
+        cn=cert_info['cn'],
+        serial_number=cert_info['serial_number'],
+    ).first()
+
+    if existing is None:
+        logger.info(
+            "Creating new account: CN='%s', serial='%s'",
+            cert_info['cn'], cert_info['serial_number'],
+        )
+        db.add(Account(
+            cn=cert_info['cn'],
+            serial_number=cert_info['serial_number'],
+            valid_from=cert_info['valid_from'],
+            valid_to=cert_info['valid_to'],
+        ))
+        db.commit()
+        stats['created'] += 1
+    else:
+        existing.valid_from = cert_info['valid_from']
+        existing.valid_to = cert_info['valid_to']
+        db.commit()
+        stats['updated'] += 1
+
+
+def _recover_after_race(db, cert_info: dict, stats: dict) -> None:
+    """После IntegrityError (гонка с client_connect) переоткрывает запись и
+    обновляет даты сертификата. Если восстановиться не удалось — errors."""
+    try:
+        acct = db.query(Account).filter_by(
+            cn=cert_info['cn'],
+            serial_number=cert_info['serial_number'],
+        ).first()
+        if acct is not None:
+            acct.valid_from = cert_info['valid_from']
+            acct.valid_to = cert_info['valid_to']
+            db.commit()
+            stats['updated'] += 1
+            logger.info(
+                "Гонка с client_connect по CN='%s' serial='%s' — запись обновлена",
+                cert_info['cn'], cert_info['serial_number'],
+            )
+        else:
+            db.rollback()
+            stats['errors'] += 1
+    except Exception as e:
+        db.rollback()
+        stats['errors'] += 1
+        logger.exception("Не удалось восстановиться после гонки: %s", e)
 
 
 def sync_certificates(db=None, certs_dir: str = None, crl_path: str = None) -> dict:
@@ -276,34 +353,23 @@ def sync_certificates(db=None, certs_dir: str = None, crl_path: str = None) -> d
             # без дополнительных SELECT запросов
             # Теперь уникальность определяется парой (cn, serial_number)
 
-            # Проверяем существование account по паре (cn, serial_number)
-            existing_account = db.query(Account).filter_by(
-                cn=cert_info['cn'],
-                serial_number=cert_info['serial_number']
-            ).first()
-
-            if existing_account is None:
-                # Создаем новый account с serial_number
-                logger.info(f"Creating new account: CN='{cert_info['cn']}', serial='{cert_info['serial_number']}'")
-                new_account = Account(
-                    cn=cert_info['cn'],
-                    serial_number=cert_info['serial_number'],
-                    valid_from=cert_info['valid_from'],
-                    valid_to=cert_info['valid_to']
+            # Покоммитная обработка: один конфликтный/гоночный сертификат не
+            # должен откатывать весь батч синхронизации (M2). Коммитим каждую
+            # запись отдельно и восстанавливаемся после гонки с client_connect.
+            try:
+                _upsert_account(db, cert_info, stats)
+            except IntegrityError:
+                # Гонка: client_connect параллельно вставил (cn, serial).
+                db.rollback()
+                _recover_after_race(db, cert_info, stats)
+            except Exception as e:
+                db.rollback()
+                stats['errors'] += 1
+                logger.exception(
+                    "Ошибка обработки сертификата CN='%s' serial='%s': %s",
+                    cert_info['cn'], cert_info['serial_number'], e,
                 )
-                db.add(new_account)
-                stats['created'] += 1
-            else:
-                # Обновляем существующий account
-                # I6.1: Обновляем даты сертификата
-                # I6.4: Идемпотентность — просто обновляем значения
-                logger.debug(f"Updating existing account: CN='{cert_info['cn']}', serial='{cert_info['serial_number']}', id={existing_account.id}")
-                existing_account.valid_from = cert_info['valid_from']
-                existing_account.valid_to = cert_info['valid_to']
-                stats['updated'] += 1
 
-        # Сохраняем изменения
-        db.commit()
         logger.info(
             f"Synchronization completed: "
             f"processed={stats['processed']}, "

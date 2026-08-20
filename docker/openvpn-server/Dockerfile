@@ -35,12 +35,13 @@ RUN apk add --no-cache \
     openssl \
     && ln -sf python3 /usr/bin/python
 
-# Устанавливаем дополнительные Python пакеты
+# Python-зависимости ставим из collector/requirements.txt — единый источник.
+# Раньше список был захардкожен здесь и в нём отсутствовал pyyaml, который
+# импортирует core/config.py: хуки падали с ModuleNotFoundError.
+COPY collector/requirements.txt /tmp/collector-requirements.txt
 RUN pip3 install --break-system-packages --no-cache-dir \
-    sqlalchemy \
-    pymysql \
-    cryptography \
-    requests
+    -r /tmp/collector-requirements.txt \
+    && rm -f /tmp/collector-requirements.txt
 
 # Создаем директории для OpenVPN
 RUN mkdir -p \

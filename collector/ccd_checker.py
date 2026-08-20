@@ -86,10 +86,15 @@ def find_ccd_files(ccd_dir: str) -> dict:
     file_count = 0
     for file_path in ccd_path.iterdir():
         if file_path.is_file():
-            # Имя файла без расширения считаем CN клиента
-            cn = file_path.stem
-            # Получаем время модификации файла
-            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+            # CCD-файл именуется РОВНО по CN (без расширения). Используем полное
+            # имя файла, а не .stem — иначе CN с точкой (john.doe) обрежется до
+            # "john" и статус has_ccd попадёт не тому аккаунту.
+            cn = file_path.name
+            # Пропускаем скрытые и редакторские backup-файлы (.swp, name~)
+            if cn.startswith(".") or cn.endswith("~"):
+                continue
+            # mtime в naive-UTC — единый стиль времени в проекте (не локальное!)
+            mtime = datetime.utcfromtimestamp(file_path.stat().st_mtime)
             ccd_files[cn] = mtime
             file_count += 1
 

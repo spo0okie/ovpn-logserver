@@ -29,8 +29,15 @@ from pathlib import Path
 # Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.database import SessionLocal, engine
-from core.models import Account, Session, Base
+# Инвариант I5.5: хук не должен падать на импорт-этапе (см. client_connect.py).
+try:
+    from core.database import SessionLocal, engine
+    from core.models import Account, Session, Base
+    _IMPORT_ERROR = None
+except Exception as _import_exc:  # noqa: BLE001 — сознательно ловим всё
+    _IMPORT_ERROR = _import_exc
+    SessionLocal = engine = None
+    Account = Session = Base = None
 
 # =============================================================================
 # Настройка логирования
@@ -41,7 +48,10 @@ LOG_DIR = Path("/var/log/openvpn-logserver")
 if not LOG_DIR.exists():
     # Fallback для тестов - используем текущую директорию
     LOG_DIR = Path(__file__).parent.parent / "logs"
-    LOG_DIR.mkdir(exist_ok=True)
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+    except Exception:
+        pass
 
 LOG_FILE = LOG_DIR / "client-disconnect.log"
 
@@ -205,6 +215,14 @@ def client_disconnect(db_session=None):
     """
     logger.info("=" * 60)
     logger.info("Starting client-disconnect script")
+
+    # I5.5: если импорт core.* не удался — не блокируем VPN
+    if _IMPORT_ERROR is not None:
+        logger.error(
+            "client-disconnect: ошибка импорта зависимостей, VPN не блокируется: %s",
+            _IMPORT_ERROR,
+        )
+        return 0
 
     # I5.1: Читаем переменные окружения
     env_vars = get_env_vars()

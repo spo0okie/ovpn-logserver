@@ -18,6 +18,7 @@
 import os
 from functools import lru_cache
 from typing import Dict, Any, Optional
+from urllib.parse import quote, quote_plus
 
 import yaml
 
@@ -60,8 +61,14 @@ def _env_int(name: str, default: Optional[int]) -> Optional[int]:
 
 @lru_cache()
 def load_db_config() -> Dict[str, Any]:
-    """Загружает конфигурацию БД из YAML и применяет ENV-override."""
-    cfg = _load_yaml("database.yaml", "database", required=True)
+    """Загружает конфигурацию БД из YAML и применяет ENV-override.
+
+    Файл database.yaml не обязателен: если все значения заданы через ENV
+    (DB_NAME/DB_USER/DB_PASSWORD/host-или-DB_UNIX_SOCKET), конфиг валиден и
+    без файла. Отсутствие обязательных значений в обоих источниках приводит
+    к ConfigError ниже.
+    """
+    cfg = _load_yaml("database.yaml", "database", required=False)
 
     merged = {
         "host": os.getenv("DB_HOST") or cfg.get("host"),
@@ -99,8 +106,12 @@ def load_db_config() -> Dict[str, Any]:
 
 @lru_cache()
 def load_auth_config() -> Dict[str, Any]:
-    """Загружает auth-конфигурацию из YAML и применяет ENV-override."""
-    cfg = _load_yaml("auth.yaml", "auth", required=True)
+    """Загружает auth-конфигурацию из YAML и применяет ENV-override.
+
+    Файл auth.yaml не обязателен, если username и password/password_hash
+    заданы через ENV (WEB_AUTH_*). Иначе — ConfigError ниже.
+    """
+    cfg = _load_yaml("auth.yaml", "auth", required=False)
     web = cfg.get("web", {}) or {}
 
     username = os.getenv("WEB_AUTH_USERNAME") or web.get("username")
@@ -147,11 +158,12 @@ def get_database_url() -> str:
         return env_url
     cfg = load_db_config()
     url = (
-        f"mysql+pymysql://{cfg['user']}:{cfg['password']}"
+        f"mysql+pymysql://{quote_plus(cfg['user'])}:{quote_plus(cfg['password'])}"
         f"@{cfg['host']}:{cfg['port']}/{cfg['name']}"
     )
     if cfg.get("unix_socket"):
-        url += f"?unix_socket={cfg['unix_socket']}"
+        # safe='/' сохраняет путь читаемым, но экранирует пробелы/спецсимволы
+        url += f"?unix_socket={quote(cfg['unix_socket'], safe='/')}"
     return url
 
 
@@ -173,9 +185,28 @@ def get_database_url_safe() -> str:
 
 
 def get_engine_kwargs() -> Dict[str, Any]:
-    """Параметры для создания SQLAlchemy engine."""
+    """Параметры для создания SQLAlchemy engine.
+
+    Если подключение задано целиком через ENV `DATABASE_URL`, конфиг
+    database.yaml не требуется — параметры пула берутся из ENV с дефолтами.
+    """
+    url = get_database_url()
+
+    if os.getenv("DATABASE_URL"):
+        kwargs: Dict[str, Any] = {
+            "pool_pre_ping": True,
+            "echo": False,
+            "pool_size": _env_int("DB_POOL_SIZE", 10),
+            "max_overflow": _env_int("DB_MAX_OVERFLOW", 20),
+            "pool_timeout": _env_int("DB_POOL_TIMEOUT", 30),
+            "pool_recycle": _env_int("DB_POOL_RECYCLE", 3600),
+        }
+        if "mysql" in url:
+            kwargs["connect_args"] = {"charset": os.getenv("DB_CHARSET") or "utf8mb4"}
+        return kwargs
+
     cfg = load_db_config()
-    kwargs: Dict[str, Any] = {
+    kwargs = {
         "pool_pre_ping": True,
         "echo": False,
         "pool_size": cfg["pool_size"],
@@ -183,7 +214,7 @@ def get_engine_kwargs() -> Dict[str, Any]:
         "pool_timeout": cfg["pool_timeout"],
         "pool_recycle": cfg["pool_recycle"],
     }
-    if "mysql" in get_database_url():
+    if "mysql" in url:
         kwargs["connect_args"] = {"charset": cfg["charset"]}
     return kwargs
 

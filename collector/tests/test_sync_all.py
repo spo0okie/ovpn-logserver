@@ -152,6 +152,33 @@ class TestSyncOrder:
                 "session_cleanup НЕ должен быть вызван при ошибке ccd_checker"
             assert result == 1
 
+    def test_s3_2_soft_errors_skip_cleanup_and_return_nonzero(self):
+        """
+        S3.2 (H2): шаг вернул stats['errors']>0 БЕЗ исключения — cleanup всё
+        равно должен быть пропущен, а run_sync вернуть 1.
+
+        Предотвращает: cleanup после частично неуспешного cert_sync (риск
+        закрытия живых сессий) и невидимость сбоя для systemd (exit 0).
+        """
+        from collector import sync_all
+
+        with patch('collector.sync_all.sync_certificates') as mock_cert, \
+             patch('collector.sync_all.check_crl') as mock_crl, \
+             patch('collector.sync_all.check_ccd') as mock_ccd, \
+             patch('collector.sync_all.cleanup_orphaned_sessions') as mock_cleanup:
+
+            # cert_sync "мягко" ошибся: 2 ошибки, но не бросил исключение
+            mock_cert.return_value = {"created": 0, "updated": 0, "errors": 2}
+            mock_crl.return_value = {"checked": 0, "revoked": 0, "errors": 0}
+            mock_ccd.return_value = {"checked": 0, "updated": 0, "errors": 0}
+            mock_cleanup.return_value = (0, 0)
+
+            result = sync_all.run_sync()
+
+            assert mock_cleanup.call_count == 0, \
+                "cleanup не должен запускаться при soft-ошибках синка"
+            assert result == 1, "run_sync должен вернуть 1 при stats['errors']>0"
+
 
 class TestSessionCleanupErrorHandling:
     """

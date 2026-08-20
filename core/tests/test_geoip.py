@@ -576,3 +576,33 @@ class TestIntegration:
             GeoIPCache.ip == '11.0.0.1'
         ).first()
         assert cache is not None
+
+    def test_negative_cache_prevents_second_api_call(self, db_session: Session, mocker):
+        """
+        Негативный кэш: при сбое API повторный вызов НЕ должен снова бить в API
+        (защита от шторма переподключений и лимита 45/min).
+        """
+        from requests.exceptions import RequestException
+
+        mock_get = mocker.patch('requests.get', side_effect=RequestException("down"))
+
+        # Первый вызов — miss, API падает, пишется негативный кэш
+        result1 = resolve_geoip('12.0.0.1', db_session=db_session)
+        assert result1['country'] is None
+        assert mock_get.call_count == 1
+
+        # Второй вызов — берёт негативный кэш, API не дёргается
+        result2 = resolve_geoip('12.0.0.1', db_session=db_session)
+        assert result2['country'] is None
+        assert mock_get.call_count == 1, "Негативный кэш не сработал — повторный запрос к API"
+
+    def test_rate_limit_429_returns_none(self, db_session: Session, mocker):
+        """HTTP 429 (лимит) → None-значения, без исключения."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_get = mocker.patch('requests.get', return_value=mock_response)
+
+        result = resolve_geoip('13.0.0.1', db_session=db_session)
+        assert result['country'] is None
+        # raise_for_status не должен вызываться — 429 обработан раньше
+        mock_response.raise_for_status.assert_not_called()

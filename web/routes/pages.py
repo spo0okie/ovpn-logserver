@@ -7,6 +7,7 @@ UI вызывает функции API напрямую (без self-HTTP).
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,6 +30,29 @@ from web.dependencies import get_db
 from web.utils.timezone import format_datetime
 
 logger = logging.getLogger(__name__)
+
+# secure-флаг session-cookie: за HTTPS в проде выставить SESSION_COOKIE_SECURE=true.
+_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+_REMEMBER_LIFETIME = 86400   # 24 часа
+_DEFAULT_LIFETIME = 3600     # 1 час
+# Верхняя граница размера страницы — совпадает с Query(le=100) в API; здесь
+# нужна отдельно, т.к. UI-роуты зовут функции API напрямую, минуя валидацию FastAPI.
+_MAX_PER_PAGE = 100
+
+
+def _clamp_pagination(page: int, per_page: int) -> tuple:
+    """Ограничивает page/per_page (UI-роуты обходят Query-валидацию API)."""
+    try:
+        page = max(1, int(page))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(per_page)
+    except (TypeError, ValueError):
+        per_page = 20
+    per_page = max(1, min(per_page, _MAX_PER_PAGE))
+    return page, per_page
+
 
 router = APIRouter(tags=["pages"])
 templates = Jinja2Templates(directory="web/templates")
@@ -81,15 +105,16 @@ def login_submit(
             status_code=401,
         )
 
-    session_id = create_session(username)
+    lifetime = _REMEMBER_LIFETIME if remember else _DEFAULT_LIFETIME
+    session_id = create_session(username, lifetime_seconds=lifetime)
     response = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
     response.set_cookie(
         key="session_id",
         value=session_id,
-        max_age=86400 if remember else 3600,
+        max_age=lifetime,
         httponly=True,
         samesite="lax",
-        secure=False,  # В продакшене за HTTPS установите True
+        secure=_COOKIE_SECURE,  # SESSION_COOKIE_SECURE=true за HTTPS в проде
     )
     logger.info("[LOGIN] Успешный вход: username=%s", username)
     return response
@@ -147,6 +172,7 @@ def accounts_list(
     _user: str = Depends(web_user),
     db: Session = Depends(get_db),
 ):
+    page, per_page = _clamp_pagination(page, per_page)
     accounts = accounts_api.list_accounts(
         page=page,
         per_page=per_page,
@@ -179,6 +205,7 @@ def account_detail(
     _user: str = Depends(web_user),
     db: Session = Depends(get_db),
 ):
+    page, per_page = _clamp_pagination(page, per_page)
     try:
         account = accounts_api.get_account(cn=cn, db=db)
     except HTTPException as exc:
@@ -187,8 +214,17 @@ def account_detail(
         account = {}
 
     try:
+        # ВАЖНО: передаём ВСЕ параметры явно. При прямом вызове функции API
+        # (минуя FastAPI) незаданные аргументы получают объекты Query(...),
+        # а не None — они попадают в SQL и роняют страницу (TypeError).
         sessions = accounts_api.get_account_sessions(
-            cn=cn, page=page, per_page=per_page, db=db
+            cn=cn,
+            page=page,
+            per_page=per_page,
+            from_date=None,
+            to_date=None,
+            status=None,
+            db=db,
         )
     except HTTPException:
         sessions = {
@@ -228,6 +264,7 @@ def sessions_list(
     Сервер не загружает данные — DataTables подтянет их через AJAX
     к /api/v1/sessions. Здесь только рендер шаблона.
     """
+    page, per_page = _clamp_pagination(page, per_page)
     return templates.TemplateResponse(
         "sessions.html",
         {
@@ -260,6 +297,7 @@ def attempts_list(
     _user: str = Depends(web_user),
     db: Session = Depends(get_db),
 ):
+    page, per_page = _clamp_pagination(page, per_page)
     attempts = attempts_api.list_attempts(
         page=page,
         per_page=per_page,

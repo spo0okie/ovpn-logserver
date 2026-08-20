@@ -31,7 +31,8 @@ class TestAccountsAPI:
 
         data = response.json()
         assert data["cn"] == sample_account.cn
-        assert data["id"] == sample_account.id
+        # Multi-cert: id сертификата — внутри certificates[], не на верхнем уровне
+        assert any(cert["id"] == sample_account.id for cert in data["certificates"])
         assert "can_connect" in data
 
     def test_get_account_sessions(self, client: TestClient, sample_account: Account, sample_sessions: list, auth_headers: dict):
@@ -111,8 +112,8 @@ class TestStatsAPI:
         assert response.status_code == 200
 
         data = response.json()
-        # sample_accounts создает 5 аккаунтов
-        assert data["accounts"]["total"] >= 5
+        # sample_accounts создает 5 аккаунтов (multi-cert: total_users/total_certs)
+        assert data["accounts"]["total_users"] >= 5
         assert data["sessions"]["active"] >= 1
 
     def test_connections_stats(self, client: TestClient, sample_sessions: list, auth_headers: dict):

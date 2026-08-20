@@ -111,10 +111,13 @@ class TestResilience:
         data = response.json()
         
         assert data["cn"] == "resilient_account"
-        assert data["is_revoked"] is True
         assert data["has_ccd"] is True
-        assert data["valid_from"] is not None
-        assert data["valid_to"] is not None
+        # Multi-cert: параметры сертификата — внутри certificates[]
+        assert data["cert_count"] >= 1
+        cert = data["certificates"][0]
+        assert cert["is_revoked"] is True
+        assert cert["valid_from"] is not None
+        assert cert["valid_to"] is not None
     
     def test_multiple_sessions_preserved_after_restart(self, db, api_client, vpn_simulator, auth_headers, restart_services):
         """

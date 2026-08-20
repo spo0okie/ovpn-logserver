@@ -22,6 +22,8 @@ from cryptography.x509.oid import NameOID
 # Добавляем путь к корню проекта
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from sqlalchemy.exc import IntegrityError
+
 from collector.cert_sync import sync_certificates, extract_cert_info, find_cert_files, parse_crl
 from core.models import Account
 
@@ -559,3 +561,118 @@ class TestHelperFunctions:
         revoked = parse_crl('/nonexistent/crl.pem')
 
         assert len(revoked) == 0
+
+
+# =============================================================================
+# M2: изоляция ошибок при синхронизации (покоммитная обработка)
+# =============================================================================
+
+class TestM2BatchIsolation:
+    """Один конфликтный/гоночный сертификат не должен откатывать весь батч."""
+
+    def test_upsert_creates_then_updates_idempotent(self, db):
+        from collector.cert_sync import _upsert_account
+        now = datetime.utcnow()
+        info = {'cn': 'u1', 'serial_number': '123', 'valid_from': now,
+                'valid_to': now + timedelta(days=365)}
+        stats = {'created': 0, 'updated': 0, 'errors': 0}
+
+        _upsert_account(db, info, stats)
+        assert stats['created'] == 1
+        acct = db.query(Account).filter_by(cn='u1', serial_number='123').first()
+        assert acct is not None
+
+        # повторный вызов с новыми датами → update, не дубль
+        info2 = {**info, 'valid_to': now + timedelta(days=730)}
+        _upsert_account(db, info2, stats)
+        assert stats['updated'] == 1
+        assert db.query(Account).filter_by(cn='u1', serial_number='123').count() == 1
+
+    def test_recover_after_race_updates_existing(self, db):
+        """Симуляция гонки: запись уже вставлена параллельно — _recover обновляет."""
+        from collector.cert_sync import _recover_after_race
+        now = datetime.utcnow()
+        # эмулируем, что client_connect уже вставил account
+        db.add(Account(cn='r1', serial_number='999', valid_from=now,
+                       valid_to=now + timedelta(days=1)))
+        db.commit()
+
+        info = {'cn': 'r1', 'serial_number': '999', 'valid_from': now,
+                'valid_to': now + timedelta(days=365)}
+        stats = {'created': 0, 'updated': 0, 'errors': 0}
+        _recover_after_race(db, info, stats)
+
+        assert stats['updated'] == 1
+        assert stats['errors'] == 0
+        acct = db.query(Account).filter_by(cn='r1', serial_number='999').first()
+        assert abs((acct.valid_to - info['valid_to']).total_seconds()) < 2
+
+    def test_integrity_error_on_one_cert_does_not_lose_others(self, db, tmp_path, mocker):
+        """
+        Мок: первый commit падает IntegrityError (гонка), последующие проходят.
+        Проверяем, что синхронизация не потеряла остальные сертификаты и не
+        откатила весь батч (M2).
+        """
+        from collector import cert_sync
+        now = datetime.utcnow()
+        create_test_certificate('cA', now, now + timedelta(days=365), tmp_path)
+        create_test_certificate('cB', now, now + timedelta(days=365), tmp_path)
+        create_test_certificate('cC', now, now + timedelta(days=365), tmp_path)
+
+        # Пустой CRL
+        crl = tmp_path / 'crl.pem'
+        mocker.patch('collector.cert_sync.parse_crl', return_value=set())
+
+        real_commit = db.commit
+        calls = {'n': 0}
+
+        def flaky_commit():
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise IntegrityError("stmt", {}, Exception("duplicate"))
+            return real_commit()
+
+        mocker.patch.object(db, 'commit', side_effect=flaky_commit)
+
+        stats = cert_sync.sync_certificates(db=db, certs_dir=str(tmp_path),
+                                            crl_path=str(crl))
+
+        # Даже при сбое на одном сертификате остальные должны быть записаны.
+        # Всего 3 сертификата: как минимум 2 успешно созданы.
+        total_accounts = db.query(Account).count()
+        assert total_accounts >= 2, f"батч потерял сертификаты: только {total_accounts}"
+
+
+class TestMisconfiguredCertsDir:
+    """
+    Молчаливая опечатка в certs_dir/cert_extension превращала cert_sync в no-op:
+    даты сертификатов не заполнялись, и понять это можно было только по пустым
+    valid_to в БД. Проверяем, что такая ситуация логируется явно.
+    """
+
+    def test_warns_when_extension_does_not_match_files(self, tmp_path, caplog):
+        import logging
+        from collector.cert_sync import find_cert_files
+
+        # В каталоге только .pem, а ищем .crt (реальный кейс с CA newcerts)
+        (tmp_path / "0100.pem").write_text("x")
+        (tmp_path / "0101.pem").write_text("x")
+
+        with caplog.at_level(logging.ERROR):
+            files = find_cert_files(str(tmp_path))
+
+        assert files == []
+        assert any("cert_extension" in r.message or ".pem" in r.getMessage()
+                   for r in caplog.records), \
+            "Несовпадение расширения должно логироваться с указанием найденных"
+
+    def test_empty_dir_is_not_reported_as_misconfiguration(self, tmp_path, caplog):
+        import logging
+        from collector.cert_sync import find_cert_files
+
+        with caplog.at_level(logging.ERROR):
+            files = find_cert_files(str(tmp_path))
+
+        assert files == []
+        # Пустой каталог — не ошибка конфигурации, ERROR быть не должно
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]

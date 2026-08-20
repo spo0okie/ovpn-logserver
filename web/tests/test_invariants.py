@@ -196,10 +196,11 @@ class TestI74_Filters:
         assert response.status_code == 200
 
         data = response.json()
-        # 3 аккаунта с is_revoked=True (0, 2, 4)
+        # 3 аккаунта с is_revoked=True (0, 2, 4). В multi-cert модели список
+        # агрегирован по CN: у отозванных нет активных сертификатов.
         assert len(data["data"]) == 3
         for acc in data["data"]:
-            assert acc["is_revoked"] is True
+            assert acc["has_active_cert"] is False
 
     def test_accounts_filter_has_ccd(self, client: TestClient, sample_accounts: list, auth_headers: dict):
         """Фильтр has_ccd для аккаунтов."""
@@ -305,7 +306,13 @@ class TestI72_ResponseFormat:
 
         if data["data"]:
             account = data["data"][0]
-            required_fields = ["id", "cn", "valid_from", "valid_to", "is_revoked", "has_ccd", "created_at"]
+            # Multi-cert модель: список агрегирован по CN, плоских полей
+            # сертификата (id/valid_from/is_revoked) здесь нет — они в
+            # /accounts/{cn} внутри certificates[].
+            required_fields = [
+                "cn", "cert_count", "active_certs", "has_active_cert",
+                "has_ccd", "created_at",
+            ]
             for field in required_fields:
                 assert field in account, f"Missing field: {field}"
 
@@ -315,12 +322,20 @@ class TestI72_ResponseFormat:
         assert response.status_code == 200
 
         data = response.json()
+        # Multi-cert модель: детали содержат список сертификатов, а не плоские
+        # поля одного сертификата.
         required_fields = [
-            "id", "cn", "valid_from", "valid_to", "is_revoked", "revoked_at",
-            "has_ccd", "can_connect", "created_at", "updated_at", "last_session"
+            "cn", "certificates", "cert_count", "active_certs",
+            "can_connect", "has_ccd", "last_session",
         ]
         for field in required_fields:
             assert field in data, f"Missing field: {field}"
+
+        # Плоские поля сертификата должны быть внутри certificates[]
+        if data["certificates"]:
+            cert = data["certificates"][0]
+            for field in ["id", "serial_number", "valid_from", "valid_to", "is_revoked"]:
+                assert field in cert, f"Missing certificate field: {field}"
 
     def test_sessions_list_format(self, client: TestClient, sample_sessions: list, auth_headers: dict):
         """Проверяет формат списка сессий."""
@@ -397,7 +412,9 @@ class TestI72_ResponseFormat:
 
         # Проверяем accounts
         accounts = data["accounts"]
-        assert "total" in accounts
+        # Multi-cert: вместо "total" — total_users (уникальные CN) и total_certs
+        assert "total_users" in accounts
+        assert "total_certs" in accounts
         assert "active_certs" in accounts
         assert "revoked" in accounts
         assert "with_ccd" in accounts

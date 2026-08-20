@@ -25,10 +25,14 @@ sys.path.insert(0, PROJECT_PATH)
 
 try:
     from collector.client_disconnect import main
-except ImportError as e:
+except BaseException as e:  # noqa: BLE001 — VPN важнее логов
     print(f"Error: Cannot import collector.client_disconnect: {e}", file=sys.stderr)
     print(f"Make sure PROJECT_PATH is correct: {PROJECT_PATH}", file=sys.stderr)
     sys.exit(0)  # Не блокируем VPN при ошибке
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BaseException as e:  # noqa: BLE001
+        print(f"client-disconnect fatal error: {e}", file=sys.stderr)
+        sys.exit(0)

@@ -68,12 +68,23 @@ def get_connected_clients(mgmt_socket_path: Optional[str] = None) -> Set[str]:
         sock.connect(mgmt_socket_path)
 
         sock.sendall(b"status 3\n")
-        response = _recv_until_end(sock)
+        response, complete = _recv_until_end(sock)
 
         try:
             sock.sendall(b"quit\n")
         except OSError:
             pass
+
+        # M1.4: неполный ответ (таймаут/обрыв/переполнение буфера до маркера END)
+        # НЕЛЬЗЯ трактовать как успех — частичный список клиентов заставит
+        # session_cleanup закрыть живые сессии как orphaned. Возвращаем пустое
+        # множество: вызывающий cleanup сработает fail-closed и ничего не тронет.
+        if not complete:
+            logger.error(
+                "MGMT: неполный ответ от Management Interface (нет маркера END) — "
+                "возвращаю пустой список во избежание ложного закрытия сессий"
+            )
+            return set()
 
         text = response.decode("utf-8", errors="ignore")
         clients = parse_clients_from_response(text)
@@ -96,21 +107,28 @@ def get_connected_clients(mgmt_socket_path: Optional[str] = None) -> Set[str]:
                 pass
 
 
-def _recv_until_end(sock: socket.socket, max_bytes: int = 1024 * 1024) -> bytes:
-    """Читает из сокета до маркера '\\nEND\\n' или таймаута."""
+def _recv_until_end(sock: socket.socket, max_bytes: int = 1024 * 1024):
+    """Читает из сокета до маркера END.
+
+    Возвращает кортеж (buf, complete): complete=True только если получен
+    маркер '\\nEND\\n'. При таймауте, обрыве соединения или переполнении
+    max_bytes до маркера complete=False — ответ неполный, доверять ему нельзя.
+    """
     buf = b""
     while len(buf) < max_bytes:
         try:
             chunk = sock.recv(4096)
         except socket.timeout:
             logger.debug("MGMT recv timeout")
-            break
+            return buf, False
         if not chunk:
-            break
+            # Соединение закрыто до маркера END
+            return buf, False
         buf += chunk
         if any(marker in buf for marker in _END_MARKERS):
-            break
-    return buf
+            return buf, True
+    # Вышли по max_bytes, не встретив END
+    return buf, False
 
 
 def parse_clients_from_response(response: str) -> Set[str]:

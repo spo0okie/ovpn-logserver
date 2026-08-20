@@ -180,6 +180,54 @@ class TestMgmtClientInvariants:
             assert isinstance(result, set)
             assert len(result) == 0
 
+    # --- H1: полнота ответа Management Interface (кросс-платформенно) ---
+    # Тестируем _recv_until_end напрямую фейковым сокетом: не требует AF_UNIX.
+
+    class _FakeSock:
+        """Мини-сокет: отдаёт заранее заданные chunks, потом timeout/пусто."""
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def recv(self, _n):
+            if not self._chunks:
+                return b""
+            item = self._chunks.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    def test_recv_incomplete_on_timeout_before_end(self):
+        """H1: таймаут до маркера END → complete=False (ответ неполный)."""
+        from collector.mgmt_client import _recv_until_end
+        sock = self._FakeSock([
+            b"CLIENT_LIST\tclient_a\t1.1.1.1:1\t10.8.0.2\n",
+            socket.timeout(),
+        ])
+        buf, complete = _recv_until_end(sock)
+        assert complete is False
+
+    def test_recv_incomplete_on_close_before_end(self):
+        """H1: обрыв (recv=b'') до END → complete=False."""
+        from collector.mgmt_client import _recv_until_end
+        sock = self._FakeSock([
+            b"CLIENT_LIST\tclient_a\t1.1.1.1:1\t10.8.0.2\n",
+            b"",
+        ])
+        buf, complete = _recv_until_end(sock)
+        assert complete is False
+
+    def test_recv_complete_with_end_marker(self):
+        """Полный ответ с '\\nEND\\n' → complete=True и парсится корректно."""
+        from collector.mgmt_client import _recv_until_end, parse_clients_from_response
+        sock = self._FakeSock([
+            b"CLIENT_LIST\tclient_a\t1.1.1.1:1\t10.8.0.2\n"
+            b"CLIENT_LIST\tclient_b\t2.2.2.2:2\t10.8.0.3\n"
+            b"END\n",
+        ])
+        buf, complete = _recv_until_end(sock)
+        assert complete is True
+        assert parse_clients_from_response(buf.decode()) == {"client_a", "client_b"}
+
 
 class TestParseClientsFromResponse:
     """

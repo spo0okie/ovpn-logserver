@@ -314,7 +314,18 @@ class Session(Base):
         default="active",
         nullable=False
     )
-    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
+        default=datetime.utcnow,
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False
+    )
+
     # I2.4: Отношения настроены корректно
     # session.account -> связанный аккаунт
     account: Mapped["Account"] = relationship(
@@ -388,7 +399,12 @@ class ConnectionAttempt(Base):
         Text,  # TEXT
         nullable=True
     )
-    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
+        default=datetime.utcnow,
+        nullable=False
+    )
+
     # I2.4: Отношения настроены корректно
     # connection_attempt.account -> связанный аккаунт
     account: Mapped[Optional["Account"]] = relationship(

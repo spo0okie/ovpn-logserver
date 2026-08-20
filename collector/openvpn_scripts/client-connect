@@ -23,12 +23,18 @@ import os
 PROJECT_PATH = os.environ.get('OPENVPN_LOGSERVER_PATH', '/opt/openvpn-logserver')
 sys.path.insert(0, PROJECT_PATH)
 
+# Ловим ЛЮБУЮ ошибку импорта (не только ImportError, но и ConfigError из
+# core.config, PermissionError и т.п.) — иначе ненулевой exit заблокирует VPN.
 try:
     from collector.client_connect import main
-except ImportError as e:
+except BaseException as e:  # noqa: BLE001 — VPN важнее логов
     print(f"Error: Cannot import collector.client_connect: {e}", file=sys.stderr)
     print(f"Make sure PROJECT_PATH is correct: {PROJECT_PATH}", file=sys.stderr)
     sys.exit(0)  # Не блокируем VPN при ошибке
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BaseException as e:  # noqa: BLE001
+        print(f"client-connect fatal error: {e}", file=sys.stderr)
+        sys.exit(0)

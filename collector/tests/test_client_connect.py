@@ -120,8 +120,18 @@ def run_client_connect(env_vars, test_engine=None):
     Returns:
         int: Код выхода
     """
-    # Устанавливаем переменные окружения
+    # Устанавливаем переменные окружения.
+    # Сначала убираем ВСЕ переменные OpenVPN: иначе значения, оставшиеся от
+    # других тестов (например от vpn_simulator в интеграционных), «протекают»
+    # сюда, и тест на отсутствующий common_name/trusted_ip перестаёт быть
+    # честным — набор становится зависимым от порядка запуска.
     old_environ = dict(os.environ)
+    for key in (
+        'common_name', 'trusted_ip', 'trusted_port', 'tls_serial_0',
+        'ifconfig_pool_remote_ip', 'time_unix', 'bytes_sent', 'bytes_received',
+        'time_duration',
+    ):
+        os.environ.pop(key, None)
     os.environ.update(env_vars)
     
     db_session = None

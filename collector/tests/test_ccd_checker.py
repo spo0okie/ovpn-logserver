@@ -186,7 +186,9 @@ class TestI63CcdUpdatesStatus:
         assert account.has_ccd is True
         # Сравниваем с точностью до секунды (так как mtime имеет ограниченную точность)
         assert account.ccd_updated_at is not None
-        assert abs((account.ccd_updated_at - mtime).total_seconds()) < 2
+        # ccd_updated_at хранится в naive-UTC (utcfromtimestamp от epoch файла).
+        expected = datetime.utcfromtimestamp(mtime.timestamp())
+        assert abs((account.ccd_updated_at - expected).total_seconds()) < 2
 
 
 # =============================================================================
@@ -350,16 +352,42 @@ class TestHelperFunctions:
         assert 'client1' in files
         assert 'client2' in files
         
-        # Проверяем что mtime корректный
-        assert abs((files['client1'] - mtime1).total_seconds()) < 2
-        assert abs((files['client2'] - mtime2).total_seconds()) < 2
+        # mtime хранится в naive-UTC (utcfromtimestamp от epoch файла)
+        expected1 = datetime.utcfromtimestamp(mtime1.timestamp())
+        expected2 = datetime.utcfromtimestamp(mtime2.timestamp())
+        assert abs((files['client1'] - expected1).total_seconds()) < 2
+        assert abs((files['client2'] - expected2).total_seconds()) < 2
+
+    def test_find_ccd_files_cn_with_dot_not_truncated(self, tmp_path):
+        """
+        M4: CN с точкой (john.doe) не должен обрезаться до 'john'.
+        CCD-файл именуется ровно по CN — используем полное имя файла.
+        """
+        create_ccd_file('john.doe', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path)
+
+        files = find_ccd_files(str(tmp_path))
+
+        assert 'john.doe' in files, "CN с точкой обрезан — has_ccd попадёт не тому аккаунту"
+        assert 'john' not in files
+
+    def test_find_ccd_files_skips_backup_files(self, tmp_path):
+        """Скрытые и backup-файлы (.swp, name~) игнорируются."""
+        create_ccd_file('client1', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path)
+        create_ccd_file('client1~', 'backup', tmp_path)
+        create_ccd_file('.hidden', 'x', tmp_path)
+
+        files = find_ccd_files(str(tmp_path))
+
+        assert 'client1' in files
+        assert 'client1~' not in files
+        assert '.hidden' not in files
 
     def test_find_ccd_files_empty_dir(self, tmp_path):
         """
         Тест find_ccd_files с пустой директорией.
         """
         files = find_ccd_files(str(tmp_path))
-        
+
         assert files == {}
 
     def test_find_ccd_files_nonexistent_dir(self):

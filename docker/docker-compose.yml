@@ -27,8 +27,11 @@ services:
     networks:
       - openvpn-network
     healthcheck:
-      # Проверяем mysqld через файл с паролем (не через -p$VAR — иначе виден в ps).
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost --defaults-extra-file=<(printf '[client]\\npassword=%s\\n' \"$$MYSQL_ROOT_PASSWORD\")"]
+      # Пароль передаём через MYSQL_PWD, а не аргументом -p$VAR (иначе виден в ps).
+      # ВАЖНО: только POSIX sh — CMD-SHELL исполняется через /bin/sh (dash), где
+      # process substitution `<(...)` синтаксическая ошибка и healthcheck никогда
+      # не проходит (mysql навсегда unhealthy → web и openvpn-server не стартуют).
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -u root --silent"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -61,7 +64,10 @@ services:
       - DATABASE_URL=mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-openvpn_logs}
       - OPENVPN_DIR=/etc/openvpn
       - CERTS_DIR=/etc/openvpn/certs
-      - CRL_FILE=/etc/openvpn/pki/crl.pem
+      # Путь должен совпадать с crl-verify в server.conf и с тем, куда
+      # entrypoint копирует CRL (/etc/openvpn/crl.pem), иначе crl_checker
+      # не найдёт файл и отзыв сертификатов не отработает.
+      - CRL_FILE=/etc/openvpn/crl.pem
       - CCD_DIR=/etc/openvpn/ccd
       - OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt.sock
     depends_on:
@@ -85,6 +91,10 @@ services:
       - /dev/net/tun:/dev/net/tun
     sysctls:
       - net.ipv4.ip_forward=1
+    volumes:
+      # Без этого тома клиент не видит ca.crt/client.crt, которые сервер кладёт
+      # в общий volume, и вечно ждёт их в wait_for_certs (entrypoint.sh).
+      - openvpn_certs:/etc/openvpn/certs
     networks:
       - openvpn-network
     environment:
@@ -113,7 +123,10 @@ services:
       - DB_PASSWORD=${MYSQL_PASSWORD}
       - WEB_AUTH_USERNAME=${WEB_AUTH_USERNAME:-admin}
       - WEB_AUTH_PASSWORD_HASH=${WEB_AUTH_PASSWORD_HASH:?WEB_AUTH_PASSWORD_HASH is required}
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
+      # SECRET_KEY/ACCESS_TOKEN_EXPIRE_MINUTES пока не читаются кодом
+      # (аутентификация — Basic + файловые сессии), поэтому не обязательны:
+      # раньше `:?` блокировал старт стенда из-за неиспользуемого значения.
+      - SECRET_KEY=${SECRET_KEY:-}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
     networks:
       - openvpn-network

@@ -15,8 +15,8 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>
         <i class="bi bi-person-circle"></i> {{ account.cn or cn }}
-        {% if account.is_revoked %}
-            <span class="badge badge-revoked">Revoked</span>
+        {% if account.cert_count is defined and account.active_certs == 0 and account.cert_count > 0 %}
+            <span class="badge badge-revoked">No active certificates</span>
         {% elif account.can_connect is defined and not account.can_connect %}
             <span class="badge bg-warning text-dark">Expired</span>
         {% elif account.can_connect is defined %}
@@ -38,30 +38,28 @@
             <div class="card-body">
                 <table class="table table-borderless">
                     <tr>
-                        <td class="text-muted">ID:</td>
-                        <td>{% if account.id %}<code>#{{ account.id }}</code>{% else %}-{% endif %}</td>
-                    </tr>
-                    <tr>
                         <td class="text-muted">Common Name:</td>
                         <td><strong>{{ account.cn or cn }}</strong></td>
                     </tr>
                     <tr>
+                        <td class="text-muted">Certificates:</td>
+                        <td>
+                            {% if account.cert_count is defined %}
+                                <strong>{{ account.cert_count }}</strong>
+                                <small class="text-muted">({{ account.active_certs }} active)</small>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
                         <td class="text-muted">Status:</td>
                         <td>
-                            {% if account.is_revoked is defined %}
-                                {% if account.is_revoked %}
-                                    <span class="badge badge-revoked">Revoked</span>
-                                    {% if account.revoked_at %}
-                                        <small class="text-muted d-block">
-                                            {% if account.revoked_at is string %}
-                                                {{ account.revoked_at[:16] | local_datetime }}
-                                            {% else %}
-                                                {{ account.revoked_at | local_datetime }}
-                                            {% endif %}
-                                        </small>
-                                    {% endif %}
-                                {% else %}
+                            {% if account.active_certs is defined %}
+                                {% if account.active_certs > 0 %}
                                     <span class="badge bg-success">Active</span>
+                                {% else %}
+                                    <span class="badge badge-revoked">No active certificates</span>
                                 {% endif %}
                             {% else %}
                                 <span class="text-muted">-</span>
@@ -108,66 +106,55 @@
                             {% else %}-{% endif %}
                         </td>
                     </tr>
-                    <tr>
-                        <td class="text-muted">Updated:</td>
-                        <td>
-                            {% if account.updated_at %}
-                                {% if account.updated_at is string %}
-                                    {{ account.updated_at[:16] | local_datetime }}
-                                {% else %}
-                                    {{ account.updated_at | local_datetime }}
-                                {% endif %}
-                            {% else %}-{% endif %}
-                        </td>
-                    </tr>
                 </table>
             </div>
         </div>
         
-        <!-- Информация о сертификате -->
+        <!-- Сертификаты пользователя (их может быть несколько) -->
         <div class="card">
             <div class="card-header bg-info text-white">
-                <i class="bi bi-file-lock"></i> Certificate
+                <i class="bi bi-file-lock"></i> Certificates
+                {% if account.cert_count is defined %}
+                    <span class="badge bg-light text-dark float-end">{{ account.cert_count }}</span>
+                {% endif %}
             </div>
-            <div class="card-body">
-                <table class="table table-borderless">
-                    <tr>
-                        <td class="text-muted">Valid From:</td>
-                        <td>
-                            {% if account.valid_from %}
-                                {% if account.valid_from is string %}
-                                    {{ account.valid_from[:10] }}
-                                {% else %}
-                                    {{ account.valid_from | local_datetime | truncate(10, true, '') }}
-                                {% endif %}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td class="text-muted">Valid To:</td>
-                        <td>
-                            {% if account.valid_to %}
-                                {% if account.valid_to is string %}
-                                    {% if account.valid_to[:10] < now.strftime('%Y-%m-%d') %}
-                                        <span class="text-danger">{{ account.valid_to[:10] }} (Expired)</span>
+            <div class="card-body p-0">
+                {% if account.certificates %}
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr>
+                                <th>Serial</th>
+                                <th>Valid To</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for cert in account.certificates %}
+                            <tr>
+                                <td><code title="{{ cert.serial_number }}">{{ cert.serial_number | truncate(12, true) }}</code></td>
+                                <td>
+                                    {% if cert.valid_to %}
+                                        {{ (cert.valid_to | local_datetime)[:10] }}
                                     {% else %}
-                                        {{ account.valid_to[:10] }}
+                                        <span class="text-muted">-</span>
                                     {% endif %}
-                                {% else %}
-                                    {% if account.valid_to | local_datetime < now %}
-                                        <span class="text-danger">{{ (account.valid_to | local_datetime)[:10] }} (Expired)</span>
+                                </td>
+                                <td>
+                                    {% if cert.is_revoked %}
+                                        <span class="badge badge-revoked">Revoked</span>
                                     {% else %}
-                                        {{ (account.valid_to | local_datetime)[:10] }}
+                                        <span class="badge bg-success">Valid</span>
                                     {% endif %}
-                                {% endif %}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                </table>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted m-3">No certificates found</p>
+                {% endif %}
             </div>
         </div>
     </div>

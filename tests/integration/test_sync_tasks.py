@@ -32,27 +32,19 @@ class TestSyncTasks:
         from core.models import Account
         
         test_cn = "test_cert_sync"
-        account = Account(
-            cn=test_cn,
-            valid_from=None,
-            valid_to=None,
-            is_revoked=False,
-            has_ccd=False
-        )
-        db.add(account)
-        db.commit()
-        
+
         # Создаем тестовый сертификат
         cert_path = create_test_cert(tmp_certs_dir, test_cn, valid_days=180)
-        
+
         # Act
         stats = run_cert_sync(tmp_certs_dir)
-        
-        # Assert
+
+        # Assert: в multi-cert модели запись создаётся на пару (cn, serial)
         assert stats['processed'] >= 1
-        assert stats['updated'] >= 1
-        
-        db.refresh(account)
+        assert stats['created'] >= 1
+
+        account = db.query(Account).filter_by(cn=test_cn).first()
+        assert account is not None
         assert account.valid_from is not None, "valid_from должен быть установлен"
         assert account.valid_to is not None, "valid_to должен быть установлен"
         
@@ -73,56 +65,48 @@ class TestSyncTasks:
         from core.models import Account
         
         test_cn = "idempotent_test"
-        account = Account(cn=test_cn)
-        db.add(account)
-        db.commit()
-        
         create_test_cert(tmp_certs_dir, test_cn, valid_days=90)
-        
-        # Act - первый запуск
+
+        # Act - первый запуск: запись создаётся
         stats1 = run_cert_sync(tmp_certs_dir)
-        db.refresh(account)
+        account = db.query(Account).filter_by(cn=test_cn).first()
+        assert account is not None
         valid_to_1 = account.valid_to
-        
-        # Act - второй запуск
+
+        # Act - второй запуск: та же пара (cn, serial) → обновление, не дубль
         stats2 = run_cert_sync(tmp_certs_dir)
         db.refresh(account)
         valid_to_2 = account.valid_to
-        
+
         # Assert
         assert valid_to_1 == valid_to_2, "Даты должны совпадать после повторного запуска"
-        assert stats1['updated'] == stats2['updated'], "Количество обновлений должно совпадать"
-    
-    def test_cert_sync_only_updates_existing_accounts(self, db, tmp_certs_dir, run_cert_sync):
+        assert stats1['created'] == 1
+        assert stats2['created'] == 0, "Повторный запуск не должен создавать дубли"
+        assert stats2['updated'] == 1
+        assert db.query(Account).filter_by(cn=test_cn).count() == 1
+
+
+    def test_cert_sync_creates_accounts_for_certificates(self, db, tmp_certs_dir, run_cert_sync):
         """
-        Тест: cert_sync только обновляет существующие аккаунты.
-        
-        Проверяет что:
-        - Не создаются новые аккаунты для несуществующих сертификатов
-        - Обновляются только существующие
+        Тест: cert_sync создаёт accounts по найденным сертификатам.
+
+        В multi-cert модели запись заводится на пару (cn, serial_number) —
+        cert_sync является источником accounts для неотозванных сертификатов.
         """
         # Arrange
         from core.models import Account
-        
-        # Создаем только один аккаунт
-        existing_cn = "existing_user"
-        Account(cn=existing_cn)
-        db.add(Account(cn=existing_cn))
-        db.commit()
-        
-        # Создаем сертификаты для существующего и несуществующего
-        create_test_cert(tmp_certs_dir, existing_cn)
-        create_test_cert(tmp_certs_dir, "non_existing_user")
-        
-        initial_count = db.query(Account).count()
-        
+
+        create_test_cert(tmp_certs_dir, "cert_user_a")
+        create_test_cert(tmp_certs_dir, "cert_user_b")
+
         # Act
         stats = run_cert_sync(tmp_certs_dir)
-        
+
         # Assert
-        final_count = db.query(Account).count()
-        assert final_count == initial_count, "Не должно быть создано новых аккаунтов"
-        assert stats['updated'] == 1, "Должен быть обновлен только 1 аккаунт"
+        assert stats['processed'] == 2
+        assert stats['created'] == 2
+        assert db.query(Account).filter_by(cn="cert_user_a").count() == 1
+        assert db.query(Account).filter_by(cn="cert_user_b").count() == 1
     
     def test_cert_sync_multiple_certs(self, db, tmp_certs_dir, run_cert_sync):
         """
@@ -135,20 +119,18 @@ class TestSyncTasks:
         
         users = ["multi_user_1", "multi_user_2", "multi_user_3"]
         for cn in users:
-            db.add(Account(cn=cn))
             create_test_cert(tmp_certs_dir, cn, valid_days=60 + users.index(cn) * 30)
-        
-        db.commit()
-        
+
         # Act
         stats = run_cert_sync(tmp_certs_dir)
-        
+
         # Assert
         assert stats['processed'] == 3
-        assert stats['updated'] == 3
-        
+        assert stats['created'] == 3
+
         for cn in users:
             account = db.query(Account).filter_by(cn=cn).first()
+            assert account is not None
             assert account.valid_from is not None
             assert account.valid_to is not None
     
@@ -163,7 +145,6 @@ class TestSyncTasks:
         
         # Создаем валидный аккаунт и сертификат
         valid_cn = "valid_cert_user"
-        db.add(Account(cn=valid_cn))
         create_test_cert(tmp_certs_dir, valid_cn)
         
         # Создаем невалидный файл сертификата
@@ -177,7 +158,7 @@ class TestSyncTasks:
         
         # Assert
         assert stats['processed'] == 2  # Оба файла обработаны
-        assert stats['updated'] == 1    # Только валидный обновлен
+        assert stats['created'] == 1    # Только валидный записан
         assert stats['errors'] == 1     # Один файл с ошибкой
     
     def test_cert_sync_skips_non_cert_files(self, db, tmp_certs_dir, run_cert_sync):
@@ -190,7 +171,6 @@ class TestSyncTasks:
         from core.models import Account
         
         test_cn = "cert_only_user"
-        db.add(Account(cn=test_cn))
         create_test_cert(tmp_certs_dir, test_cn)
         
         # Создаем файлы с другими расширениями
@@ -205,7 +185,7 @@ class TestSyncTasks:
         
         # Assert
         assert stats['processed'] == 1  # Только .crt файл
-        assert stats['updated'] == 1
+        assert stats['created'] == 1
     
     def test_cert_sync_updates_account_metadata(self, db, tmp_certs_dir, run_cert_sync, api_client, auth_headers):
         """
@@ -217,21 +197,21 @@ class TestSyncTasks:
         from core.models import Account
         
         test_cn = "api_sync_user"
-        db.add(Account(cn=test_cn))
         create_test_cert(tmp_certs_dir, test_cn, valid_days=365)
-        db.commit()
-        
+
         # Act
         run_cert_sync(tmp_certs_dir)
-        
-        # Assert - проверяем через API
+
+        # Assert - проверяем через API (multi-cert: даты внутри certificates[])
         response = api_client.get(f"/api/v1/accounts/{test_cn}", headers=auth_headers)
         assert response.status_code == 200
-        
+
         data = response.json()
         assert data["cn"] == test_cn
-        assert data["valid_from"] is not None
-        assert data["valid_to"] is not None
+        assert data["cert_count"] >= 1
+        cert = data["certificates"][0]
+        assert cert["valid_from"] is not None
+        assert cert["valid_to"] is not None
     
     def test_cert_sync_empty_directory(self, db, tmp_certs_dir, run_cert_sync):
         """
@@ -260,21 +240,28 @@ class TestSyncTasks:
         
         test_cn = "renewal_user"
         old_valid_to = datetime.utcnow() + timedelta(days=30)
-        account = Account(
-            cn=test_cn,
-            valid_from=datetime.utcnow() - timedelta(days=335),
-            valid_to=old_valid_to
-        )
-        db.add(account)
-        db.commit()
-        
-        # Создаем новый сертификат с продленным сроком
+
+        # Первый сертификат (короткий срок) — запись создаётся синхронизацией
+        create_test_cert(tmp_certs_dir, test_cn, valid_days=30)
+        run_cert_sync(tmp_certs_dir)
+        account = db.query(Account).filter_by(cn=test_cn).first()
+        assert account is not None
+        first_valid_to = account.valid_to
+
+        # Перевыпуск: тот же CN, тот же файл — но новый сертификат с большим сроком
+        for f in tmp_certs_dir.glob("*.crt"):
+            f.unlink()
         create_test_cert(tmp_certs_dir, test_cn, valid_days=365)
-        
+
         # Act
         run_cert_sync(tmp_certs_dir)
-        
-        # Assert
-        db.refresh(account)
-        # Новая дата должна быть позже старой
-        assert account.valid_to > old_valid_to
+
+        # Assert: продлённый сертификат отражён в БД
+        renewed = (
+            db.query(Account)
+            .filter_by(cn=test_cn)
+            .order_by(Account.valid_to.desc())
+            .first()
+        )
+        assert renewed.valid_to > first_valid_to
+        assert renewed.valid_to > old_valid_to

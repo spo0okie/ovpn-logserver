@@ -58,36 +58,53 @@ def run_sync():
     try:
         db = SessionLocal()
 
-        # 1. Синхронизация сертификатов
-        # Создаёт accounts для неотозванных CN, обновляет valid_from/valid_to
+        # Суммарные "мягкие" ошибки шагов (шаг вернул stats['errors']>0, но не
+        # бросил исключение). Жёсткое исключение любого шага пробрасывается в
+        # outer except → fail-fast, cleanup не выполняется, exit 1.
+        sync_errors = 0
+
+        # 1. cert_sync — создаёт accounts, обновляет valid_from/valid_to
         print("Starting certificate sync...")
-        cert_stats = sync_certificates(db)
+        cert_stats = sync_certificates(db) or {}
         print(f"Certificate sync completed: {cert_stats}")
+        sync_errors += cert_stats.get("errors", 0)
 
-        # 2. Проверка CRL
-        # Обновляет is_revoked и revoked_at для всех accounts
+        # 2. crl_checker — обновляет is_revoked/revoked_at
         print("Starting CRL check...")
-        crl_stats = check_crl(db)
+        crl_stats = check_crl(db) or {}
         print(f"CRL check completed: {crl_stats}")
+        sync_errors += crl_stats.get("errors", 0)
 
-        # 3. Проверка CCD файлов
-        # Обновляет has_ccd и ccd_updated_at для всех accounts
+        # 3. ccd_checker — обновляет has_ccd/ccd_updated_at
         print("Starting CCD check...")
-        ccd_stats = check_ccd(db)
+        ccd_stats = check_ccd(db) or {}
         print(f"CCD check completed: {ccd_stats}")
+        sync_errors += ccd_stats.get("errors", 0)
 
-        # S3.1: Очистка orphaned сессий выполняется ПОСЛЕ успешного выполнения предыдущих задач
-        # S3.3: При ошибке session_cleanup - логируется, но не блокирует следующие запуски
-        try:
-            print("Starting session cleanup...")
-            orphaned_count, marked_count = cleanup_orphaned_sessions(db)
-            print(f"Session cleanup completed: {orphaned_count} orphaned, {marked_count} marked")
-        except Exception as e:
-            # S3.3: Ошибка session_cleanup логируется, но не пробрасывается
-            print(f"Session cleanup error (non-blocking): {e}", file=sys.stderr)
-            logger.error(f"Session cleanup failed: {e}")
+        # S3.1/S3.2: session_cleanup выполняется ТОЛЬКО если предыдущие шаги
+        # прошли без ошибок. Иначе состояние accounts/сессий может быть неполным
+        # и cleanup ошибочно пометит живые сессии как orphaned.
+        if sync_errors == 0:
+            try:
+                print("Starting session cleanup...")
+                orphaned_count, marked_count = cleanup_orphaned_sessions(db)
+                print(f"Session cleanup completed: {orphaned_count} orphaned, {marked_count} marked")
+            except Exception as e:
+                # S3.3: ошибка cleanup логируется, но не блокирует (exit не 1)
+                print(f"Session cleanup error (non-blocking): {e}", file=sys.stderr)
+                logger.error(f"Session cleanup failed: {e}")
+        else:
+            print(
+                f"Skipping session cleanup: предыдущие шаги дали {sync_errors} ошибок "
+                f"(S3.2 — cleanup только после успешного синка)",
+                file=sys.stderr,
+            )
+            logger.warning(
+                "session_cleanup пропущен из-за %d ошибок в предыдущих шагах", sync_errors
+            )
 
-        return 0
+        # exit != 0 при ошибках синка — иначе systemd не увидит сбой
+        return 0 if sync_errors == 0 else 1
 
     except Exception as e:
         print(f"Error during sync: {e}", file=sys.stderr)

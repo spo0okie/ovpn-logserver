@@ -30,6 +30,19 @@ logger = logging.getLogger(__name__)
 GEOIP_API_URL = "http://ip-api.com/json/{ip}"
 CACHE_TTL_DAYS = 7
 REQUEST_TIMEOUT = 5  # I3.5: Таймаут не более 5 секунд
+# Негативный кэш: при сбое/лимите API запоминаем "не удалось" на короткий срок,
+# чтобы шторм переподключений (рестарт сервера, десятки клиентов) не долбил
+# ip-api.com (лимит 45 req/min) и не блокировал каждый client-connect на 5с.
+NEGATIVE_CACHE_TTL_MINUTES = 15
+_NULL_GEO = {
+    'country': None,
+    'country_code': None,
+    'city': None,
+    'region': None,
+    'latitude': None,
+    'longitude': None,
+    'isp': None,
+}
 
 
 def is_valid_ip(ip: str) -> bool:
@@ -93,20 +106,24 @@ def _get_cached_geoip(db: Session, ip: str) -> Optional[GeoIPCache]:
     return cache_entry
 
 
-def _save_to_cache(db: Session, ip: str, data: dict) -> GeoIPCache:
+def _save_to_cache(db: Session, ip: str, data: dict, ttl: Optional[timedelta] = None) -> GeoIPCache:
     """
     Сохраняет GeoIP данные в кэш БД.
-    
+
     Args:
         db: Сессия БД
         ip: IP адрес
         data: Словарь с GeoIP данными
-    
+        ttl: Время жизни записи (по умолчанию CACHE_TTL_DAYS; короткий TTL
+             используется для негативного кэша при сбое API)
+
     Returns:
         Созданная или обновленная запись кэша
     """
     # Рассчитываем время истечения кэша
-    expires_at = datetime.utcnow() + timedelta(days=CACHE_TTL_DAYS)
+    if ttl is None:
+        ttl = timedelta(days=CACHE_TTL_DAYS)
+    expires_at = datetime.utcnow() + ttl
     
     # Проверяем, есть ли уже запись для этого IP
     cache_entry = db.query(GeoIPCache).filter(GeoIPCache.ip == ip).first()
@@ -156,8 +173,15 @@ def _fetch_from_api(ip: str) -> Optional[dict]:
     try:
         url = GEOIP_API_URL.format(ip=ip)
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
+
+        # ip-api.com при превышении лимита (45 req/min) отдаёт 429 — логируем
+        # отдельно; негативный кэш выше по стеку не даст долбить API дальше.
+        if response.status_code == 429:
+            logger.warning("GeoIP API rate limit (429) for IP %s", ip)
+            return None
+
         response.raise_for_status()
-        
+
         data = response.json()
         
         # Проверяем статус ответа API
@@ -239,22 +263,32 @@ def resolve_geoip(ip: str, db_session: Optional[Session] = None) -> dict:
         # I3.3: Cache miss - делаем запрос к API
         logger.debug(f"GeoIP cache miss for IP {ip}, fetching from API")
         api_data = _fetch_from_api(ip)
-        
+
         if api_data is not None:
-            # Сохраняем в кэш
-            _save_to_cache(db, ip, api_data)
+            # Сохраняем в кэш. Сбой записи (например, гонка двух хуков на один IP
+            # → duplicate key) НЕ должен терять уже полученную геолокацию и не
+            # должен ронять client-connect — просто логируем.
+            try:
+                _save_to_cache(db, ip, api_data)
+            except Exception as exc:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning("GeoIP: не удалось записать кэш для %s: %s", ip, exc)
             return api_data
-        
-        # I3.4: API недоступен или вернул ошибку - возвращаем None значения
-        return {
-            'country': None,
-            'country_code': None,
-            'city': None,
-            'region': None,
-            'latitude': None,
-            'longitude': None,
-            'isp': None
-        }
+
+        # I3.4: API недоступен/лимит/ошибка. Пишем НЕГАТИВНЫЙ кэш на короткий
+        # срок, чтобы следующий reconnect не ждал таймаут API снова.
+        try:
+            _save_to_cache(db, ip, _NULL_GEO, ttl=timedelta(minutes=NEGATIVE_CACHE_TTL_MINUTES))
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.debug("GeoIP: не удалось записать негативный кэш для %s: %s", ip, exc)
+        return dict(_NULL_GEO)
     
     except Exception as e:
         # I3.4: Любая ошибка - возвращаем None значения, не падаем

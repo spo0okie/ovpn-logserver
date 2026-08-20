@@ -1,0 +1,21 @@
+# Секреты НЕ должны попадать в образ: web-контейнер получает настройки через
+# environment (DATABASE_URL, WEB_AUTH_*) из docker-compose.
+config/*.yaml
+!config/*.yaml.example
+docker/.env
+.env
+.env.*
+!.env.example
+
+# Артефакты и мусор
+*.db
+logs/
+sessions/
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+htmlcov/
+.coverage

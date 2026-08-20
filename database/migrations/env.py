@@ -49,7 +49,10 @@ def run_migrations_offline() -> None:
     В этом режиме URL базы данных передаётся напрямую,
     и соединение не создаётся.
     """
-    url = config.get_main_option("sqlalchemy.url", DB_URL)
+    # alembic.ini содержит заглушку sqlalchemy.url — берём реальный URL из
+    # централизованной конфигурации, иначе offline-режим (`--sql`) падал бы
+    # на несуществующем диалекте "driver".
+    url = DB_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,

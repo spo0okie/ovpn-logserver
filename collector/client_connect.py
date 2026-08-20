@@ -33,11 +33,25 @@ from pathlib import Path
 # Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy.dialects.mysql import insert
-from core.database import SessionLocal, engine
-from core.models import Account, Session, Base
-from core.geoip import resolve_geoip
-from core.serial import normalize_serial
+# Инвариант I4.5: хук не должен падать на импорт-этапе (ошибка конфига/БД/прав
+# при загрузке core.database даёт ненулевой exit → OpenVPN заблокирует клиента).
+# Любой сбой импорта фиксируем и обрабатываем внутри main() с exit 0.
+try:
+    from sqlalchemy.dialects.mysql import insert
+    from core.database import SessionLocal, engine
+    from core.models import Account, Session, Base
+    from core.geoip import resolve_geoip
+    from core.serial import normalize_serial
+    _IMPORT_ERROR = None
+except Exception as _import_exc:  # noqa: BLE001 — сознательно ловим всё
+    _IMPORT_ERROR = _import_exc
+    insert = None
+    SessionLocal = engine = None
+    Account = Session = Base = None
+    resolve_geoip = None
+
+    def normalize_serial(value):  # заглушка на случай сбоя импорта
+        return value
 
 # =============================================================================
 # Настройка логирования
@@ -48,7 +62,12 @@ LOG_DIR = Path("/var/log/openvpn-logserver")
 if not LOG_DIR.exists():
     # Fallback для тестов - используем текущую директорию
     LOG_DIR = Path(__file__).parent.parent / "logs"
-    LOG_DIR.mkdir(exist_ok=True)
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+    except Exception:
+        # Нет прав на создание каталога — не роняем импорт, FileHandler ниже
+        # всё равно защищён try/except и деградирует на stderr.
+        pass
 
 LOG_FILE = LOG_DIR / "client-connect.log"
 
@@ -338,6 +357,14 @@ def client_connect(db_session=None):
     """
     logger.info("=" * 60)
     logger.info("Starting client-connect script")
+
+    # I4.5: если импорт core.* не удался (конфиг/БД/права) — не блокируем VPN
+    if _IMPORT_ERROR is not None:
+        logger.error(
+            "client-connect: ошибка импорта зависимостей, VPN не блокируется: %s",
+            _IMPORT_ERROR,
+        )
+        return 0
 
     # I4.1: Читаем переменные окружения
     env_vars = get_env_vars()

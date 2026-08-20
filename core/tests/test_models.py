@@ -102,7 +102,7 @@ class TestI22TableAndColumnNames:
         expected = {
             "id", "account_id", "session_id", "connected_at", "disconnected_at",
             "source_ip", "country", "city", "bytes_sent", "bytes_received",
-            "virtual_ip", "status"
+            "virtual_ip", "status", "created_at", "updated_at"
         }
         assert column_names == expected
     
@@ -114,7 +114,7 @@ class TestI22TableAndColumnNames:
         column_names = {col.name for col in mapper.columns}
         expected = {
             "id", "account_id", "attempted_at", "source_ip", "cert_cn",
-            "failure_reason", "failure_type", "details"
+            "failure_reason", "failure_type", "details", "created_at"
         }
         assert column_names == expected
     
