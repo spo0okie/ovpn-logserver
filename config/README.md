@@ -27,7 +27,7 @@ database:
   port: 3306
   name: openvpn_logs
   user: openvpn_user
-  password: REDACTED_DB_PASSWORD  # Пароль в открытом виде
+  password: СМЕНИТЕ_ПАРОЛЬ_БД      # Пароль в открытом виде
 
   # Параметры пула соединений
   pool_size: 10
@@ -63,7 +63,7 @@ database:
 auth:
   web:
     username: admin
-    password: admin_password_123  # Пароль в открытом виде
+    password: СМЕНИТЕ_ПАРОЛЬ        # Пароль в открытом виде (legacy; лучше password_hash)
 ```
 
 #### Параметры auth.yaml
@@ -301,7 +301,7 @@ url = get_database_url()
 # Получить учетные данные для аутентификации
 auth = get_web_auth_credentials()
 print(auth['username'])  # admin
-print(auth['password'])  # admin_password_123
+print(auth['password'])  # значение из config/auth.yaml
 ```
 
 ### Кэширование
