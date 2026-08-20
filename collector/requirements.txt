@@ -9,9 +9,6 @@ pymysql>=1.1.0
 # Криптография для работы с сертификатами и PyMySQL
 cryptography>=41.0.0
 
-# Работа с сертификатами OpenSSL
-pyopenssl>=23.3.0
-
 # HTTP запросы для GeoIP
 requests>=2.31.0
 

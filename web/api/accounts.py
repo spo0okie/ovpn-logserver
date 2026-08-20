@@ -71,7 +71,7 @@ def list_accounts(
     is_revoked: Optional[bool] = Query(None, description="Фильтр по наличию отозванных сертификатов"),
     has_ccd: Optional[bool] = Query(None, description="Фильтр по наличию CCD"),
     search: Optional[str] = Query(None, description="Поиск по CN"),
-    sort_by: str = Query("cn", description="Поле для сортировки: cn, created_at, cert_count, active_certs"),
+    sort_by: str = Query("cn", description="Поле для сортировки: cn, created_at, cert_count, active_certs, has_ccd"),
     sort_order: str = Query("asc", description="Направление сортировки: asc, desc"),
     db: Session = Depends(get_db)
 ):
@@ -128,11 +128,24 @@ def list_accounts(
                 Account.valid_to == None,
                 Account.valid_to >= datetime.utcnow()
             )
-        ), 1), else_=0))
+        ), 1), else_=0)),
+        # Список агрегирован по CN, поэтому сортируем по «есть ли CCD хотя бы
+        # у одного сертификата» — тем же признаком, что показан в таблице.
+        "has_ccd": func.max(Account.has_ccd),
     }
     
-    # Валидация параметра сортировки
-    sort_column = sort_column_map.get(sort_by, Account.cn)
+    # Валидация параметра сортировки. Неизвестное значение — ошибка, а не тихий
+    # фолбэк на cn: иначе клиент считает, что отсортировал, а это не так.
+    # Поведение согласовано со stats-эндпоинтами (там так же валидируется group_by).
+    if sort_by not in sort_column_map:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid sort_by parameter: {sort_by}",
+                "code": "INVALID_PARAMETER",
+            },
+        )
+    sort_column = sort_column_map[sort_by]
     
     # Применяем направление сортировки
     if sort_order.lower() == "desc":

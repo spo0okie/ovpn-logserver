@@ -125,6 +125,7 @@
                         <thead>
                             <tr>
                                 <th>Serial</th>
+                                <th>Valid From</th>
                                 <th>Valid To</th>
                                 <th>Status</th>
                             </tr>
@@ -133,6 +134,13 @@
                         {% for cert in account.certificates %}
                             <tr>
                                 <td><code title="{{ cert.serial_number }}">{{ cert.serial_number | truncate(12, true) }}</code></td>
+                                <td>
+                                    {% if cert.valid_from %}
+                                        {{ (cert.valid_from | local_datetime)[:10] }}
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
                                 <td>
                                     {% if cert.valid_to %}
                                         {{ (cert.valid_to | local_datetime)[:10] }}
@@ -143,6 +151,9 @@
                                 <td>
                                     {% if cert.is_revoked %}
                                         <span class="badge badge-revoked">Revoked</span>
+                                        {% if cert.revoked_at %}
+                                            <small class="text-muted d-block">{{ (cert.revoked_at | local_datetime)[:10] }}</small>
+                                        {% endif %}
                                     {% else %}
                                         <span class="badge bg-success">Valid</span>
                                     {% endif %}

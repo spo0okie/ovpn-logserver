@@ -90,6 +90,16 @@
                             </a>
                         </th>
                         <th>
+                            {% set sort_count = 'asc' if accounts.meta.sort_by != 'cert_count' or accounts.meta.sort_order == 'desc' else 'desc' %}
+                            <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=cert_count&sort_order={{ sort_count }}"
+                               class="text-dark text-decoration-none">
+                                Certificates
+                                {% if accounts.meta.sort_by == 'cert_count' %}
+                                    <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                        <th>
                             {% set sort_active = 'asc' if accounts.meta.sort_by != 'active_certs' or accounts.meta.sort_order == 'desc' else 'desc' %}
                             <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=active_certs&sort_order={{ sort_active }}" 
                                class="text-dark text-decoration-none">
@@ -134,6 +144,7 @@
                                 <span class="text-muted">-</span>
                             {% endif %}
                         </td>
+                        <td>{{ account.cert_count }}</td>
                         <td>{{ account.active_certs }}</td>
                         <td class="table-actions">
                             <a href="/accounts/{{ account.cn }}" class="btn btn-sm btn-outline-primary">

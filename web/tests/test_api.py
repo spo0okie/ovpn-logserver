@@ -157,3 +157,26 @@ class TestMainEndpoints:
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
+
+
+class TestAccountsSorting:
+    """
+    Сортировка списка аккаунтов. Раньше неизвестное значение sort_by молча
+    подменялось на cn, а has_ccd отсутствовал в маппинге, хотя UI его предлагал.
+    """
+
+    def test_sort_by_has_ccd_supported(self, client: TestClient, sample_accounts: list, auth_headers: dict):
+        response = client.get("/api/v1/accounts?sort_by=has_ccd", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["meta"]["sort_by"] == "has_ccd"
+
+    def test_unknown_sort_by_rejected(self, client: TestClient, sample_accounts: list, auth_headers: dict):
+        response = client.get("/api/v1/accounts?sort_by=nonexistent", headers=auth_headers)
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "INVALID_PARAMETER"
+
+    def test_all_ui_sort_values_accepted(self, client: TestClient, sample_accounts: list, auth_headers: dict):
+        """Значения, которые формирует accounts.html, должны приниматься API."""
+        for value in ("cn", "created_at", "cert_count", "active_certs", "has_ccd"):
+            response = client.get(f"/api/v1/accounts?sort_by={value}", headers=auth_headers)
+            assert response.status_code == 200, f"sort_by={value} отклонён"

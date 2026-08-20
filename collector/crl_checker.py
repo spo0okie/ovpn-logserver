@@ -20,12 +20,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.x509.oid import NameOID
 
 from core.database import SessionLocal
 from core.models import Account
 from core.serial import normalize_serial
-from collector.config import CRL_FILE, CERTS_DIR, CERT_EXTENSION
+from collector.config import CRL_FILE, CERTS_DIR
 
 # =============================================================================
 # Настройка логирования
@@ -115,68 +114,6 @@ def parse_crl(crl_path: str) -> dict:
     except Exception as e:
         logger.error(f"Error parsing CRL {crl_path}: {e}")
         return None
-
-
-def extract_cert_info(cert_path: str) -> dict:
-    """
-    Извлекает информацию из сертификата.
-
-    Args:
-        cert_path: Путь к файлу сертификата
-
-    Returns:
-        dict: Словарь с полями cn и serial_number, или None при ошибке
-    """
-    try:
-        with open(cert_path, 'rb') as f:
-            cert_data = f.read()
-
-        cert = x509.load_pem_x509_certificate(cert_data, default_backend())
-
-        # Извлекаем CN из Subject
-        cn = None
-        for attr in cert.subject:
-            if attr.oid == NameOID.COMMON_NAME:
-                cn = attr.value
-                break
-
-        return {
-            'cn': cn,
-            'serial_number': normalize_serial(cert.serial_number)
-        }
-    except Exception as e:
-        logger.debug(f"Error extracting cert info from {cert_path}: {e}")
-        return None
-
-
-def build_cn_to_serial_map(certs_dir: str) -> dict:
-    """
-    Строит маппинг CN -> serial_number из директории с сертификатами.
-
-    Args:
-        certs_dir: Путь к директории с сертификатами
-
-    Returns:
-        dict: Маппинг {cn: serial_number}
-    """
-    certs_path = Path(certs_dir)
-    if not certs_path.exists() or not certs_path.is_dir():
-        logger.warning(f"Certificates directory not found: {certs_dir}")
-        return {}
-
-    cn_to_serial = {}
-
-    # Ищем файлы с расширением сертификатов
-    cert_files = list(certs_path.glob(f"*{CERT_EXTENSION}"))
-    logger.debug(f"Found {len(cert_files)} certificate files in {certs_dir}")
-
-    for cert_file in cert_files:
-        cert_info = extract_cert_info(str(cert_file))
-        if cert_info and cert_info['cn']:
-            cn_to_serial[cert_info['cn']] = cert_info['serial_number']
-
-    logger.info(f"Built CN to serial mapping: {len(cn_to_serial)} entries")
-    return cn_to_serial
 
 
 def check_crl(db=None, crl_path: str = None, certs_dir: str = None) -> dict:

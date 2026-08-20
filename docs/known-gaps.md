@@ -21,13 +21,6 @@
 дашборде только карточки с метриками. Нет также экспорта в CSV на `/sessions` и
 отдельной страницы деталей сессии `/sessions/{id}` (в API такой эндпоинт есть).
 
-## Мелочи в UI
-
-- `accounts.html` предлагает сортировку `sort_by=has_ccd`, которой нет в
-  `sort_column_map` (`web/api/accounts.py`) — молча сортирует по `cn`.
-- В списке аккаунтов не выводится `cert_count` (API его отдаёт).
-- В деталях аккаунта не показываются `valid_from` и `revoked_at` сертификатов.
-
 ## Надёжность
 
 **Закрытие orphaned-сессии и создание новой в `client_connect` — не одна
@@ -70,9 +63,4 @@ systemd-таймера) — file-lock отсутствует.
 
 ## Прочее
 
-- `collector/crl_checker.py: build_cn_to_serial_map` — мёртвый код, нигде не
-  вызывается.
 - Зависимости заданы только нижними границами (`>=`), lock-файла нет.
-- В `web/requirements.txt` есть неиспользуемый `aiomysql`, в
-  `collector/requirements.txt` — `pyopenssl` (работа с сертификатами идёт через
-  `cryptography`).
