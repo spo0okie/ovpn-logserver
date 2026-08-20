@@ -55,7 +55,6 @@ def clean_tables(db_connection: pymysql.Connection) -> Generator[None, None, Non
         # Очищаем таблицы в обратном порядке (сначала дочерние)
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
         cursor.execute("TRUNCATE TABLE geoip_cache")
-        cursor.execute("TRUNCATE TABLE connection_attempts")
         cursor.execute("TRUNCATE TABLE sessions")
         cursor.execute("TRUNCATE TABLE accounts")
         cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
@@ -71,56 +70,75 @@ def clean_tables(db_connection: pymysql.Connection) -> Generator[None, None, Non
 
 class TestInvariantI11:
     """
-    Тесты для инварианта I1.1: Уникальность CN в таблице accounts.
+    Тесты для инварианта I1.1: уникальность accounts по паре (cn, serial_number).
 
-    Проверяет что поле cn в таблице accounts имеет уникальный индекс
-    и попытка вставки дубликата вызывает ошибку.
+    Модель multi-certificate: строка = один сертификат, «пользователь» — набор
+    строк с одним cn. Прежний уникальный ключ uk_cn по одному cn удалён
+    миграцией 002; ограничение теперь composite — uk_cn_serial.
     """
 
-    def test_unique_cn_constraint(self, db_connection: pymysql.Connection) -> None:
+    def test_same_cn_different_serials_allowed(self, db_connection: pymysql.Connection) -> None:
         """
-        Тест I1.1: Попытка вставить дубликат CN должна падать с DUPLICATE KEY ERROR.
+        I1.1: два сертификата одного пользователя должны сосуществовать.
 
-        Сценарий:
-        1. Вставляем запись с CN='test'
-        2. Пытаемся вставить ещё одну запись с тем же CN
-        3. Ожидаем ошибку IntegrityError (1062 - Duplicate entry)
+        Это ровно тот сценарий, из-за которого схему и переделывали: при
+        перевыпуске сертификата вставка падала с Duplicate entry по uk_cn.
         """
         cursor = db_connection.cursor()
 
-        # Шаг 1: Вставляем первую запись
-        cursor.execute("INSERT INTO accounts (cn) VALUES ('test')")
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('test', '101')")
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('test', '102')")
         db_connection.commit()
 
-        # Шаг 2: Пытаемся вставить дубликат
+        cursor.execute("SELECT COUNT(*) as cnt FROM accounts WHERE cn = 'test'")
+        assert cursor.fetchone()['cnt'] == 2
+
+        cursor.close()
+
+    def test_duplicate_cn_serial_pair_rejected(self, db_connection: pymysql.Connection) -> None:
+        """
+        I1.1: повтор пары (cn, serial_number) должен падать с Duplicate entry.
+        """
+        cursor = db_connection.cursor()
+
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('test', '101')")
+        db_connection.commit()
+
         with pytest.raises(pymysql.err.IntegrityError) as exc_info:
-            cursor.execute("INSERT INTO accounts (cn) VALUES ('test')")
+            cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('test', '101')")
             db_connection.commit()
 
-        # Шаг 3: Проверяем что ошибка связана с дубликатом ключа
-        assert exc_info.value.args[0] == 1062  # Код ошибки Duplicate entry
+        assert exc_info.value.args[0] == 1062  # Duplicate entry
         assert 'Duplicate entry' in str(exc_info.value)
 
         cursor.close()
 
-    def test_unique_cn_different_values_allowed(self, db_connection: pymysql.Connection) -> None:
+    def test_uk_cn_no_longer_exists(self, db_connection: pymysql.Connection) -> None:
         """
-        Тест I1.1 (дополнительный): Разные CN должны вставляться без проблем.
+        I1.1: старого ключа uk_cn в схеме быть не должно.
 
-        Сценарий:
-        1. Вставляем несколько записей с разными CN
-        2. Проверяем что все записи успешно добавлены
+        Страхует от отката к одно-сертификатной модели.
         """
         cursor = db_connection.cursor()
+        cursor.execute("SHOW INDEX FROM accounts")
+        names = {row['Key_name'] for row in cursor.fetchall()}
 
-        cursor.execute("INSERT INTO accounts (cn) VALUES ('user1')")
-        cursor.execute("INSERT INTO accounts (cn) VALUES ('user2')")
-        cursor.execute("INSERT INTO accounts (cn) VALUES ('user3')")
+        assert 'uk_cn_serial' in names, "composite unique uk_cn_serial отсутствует"
+        assert 'uk_cn' not in names, "старый uk_cn должен быть удалён миграцией 002"
+
+        cursor.close()
+
+    def test_different_cn_allowed(self, db_connection: pymysql.Connection) -> None:
+        """Разные CN вставляются без проблем."""
+        cursor = db_connection.cursor()
+
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('user1', '1')")
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('user2', '2')")
+        cursor.execute("INSERT INTO accounts (cn, serial_number) VALUES ('user3', '3')")
         db_connection.commit()
 
         cursor.execute("SELECT COUNT(*) as cnt FROM accounts")
-        result = cursor.fetchone()
-        assert result['cnt'] == 3
+        assert cursor.fetchone()['cnt'] == 3
 
         cursor.close()
 
@@ -400,11 +418,11 @@ class TestInvariantI15:
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = %s
-            AND TABLE_NAME IN ('accounts', 'sessions', 'connection_attempts', 'geoip_cache')
+            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache')
         """, (TEST_DB_CONFIG['database'],))
 
         tables = [row['TABLE_NAME'] for row in cursor.fetchall()]
-        expected_tables = {'accounts', 'sessions', 'connection_attempts', 'geoip_cache'}
+        expected_tables = {'accounts', 'sessions', 'geoip_cache'}
         assert set(tables) == expected_tables, f"Missing tables: {expected_tables - set(tables)}"
 
         cursor.close()
@@ -425,7 +443,7 @@ class TestInvariantI15:
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = %s
-            AND TABLE_NAME IN ('accounts', 'sessions', 'connection_attempts', 'geoip_cache')
+            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache')
         """, (TEST_DB_CONFIG['database'],))
 
         tables = [row['TABLE_NAME'] for row in cursor.fetchall()]

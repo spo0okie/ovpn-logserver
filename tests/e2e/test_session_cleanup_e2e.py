@@ -68,6 +68,25 @@ def run_docker_compose_cmd(cmd: list, cwd: str = None) -> subprocess.CompletedPr
     return subprocess.run(full_cmd, cwd=cwd or os.getcwd(), capture_output=True, text=True)
 
 
+def mysql_query(sql: str) -> subprocess.CompletedProcess:
+    """
+    Выполняет SQL в контейнере MySQL.
+
+    Учётные данные берутся из окружения (как их задаёт docker-compose), а не
+    хардкодятся: раньше в тестах стояли -uopenvpn -popenvpn_password, из-за чего
+    смена MYSQL_USER/MYSQL_PASSWORD в .env ломала тесты.
+    Пароль передаётся через MYSQL_PWD, чтобы не светиться в списке процессов.
+    """
+    user = os.environ.get("MYSQL_USER", "openvpn")
+    password = os.environ.get("MYSQL_PASSWORD", "openvpn_password")
+    database = os.environ.get("MYSQL_DATABASE", "openvpn_logs")
+    return subprocess.run(
+        ["docker", "exec", "-e", f"MYSQL_PWD={password}", "openvpn-mysql",
+         "mysql", f"-u{user}", database, "-e", sql],
+        capture_output=True, text=True,
+    )
+
+
 def run_in_container_with_env(container: str, script: str, env: dict) -> subprocess.CompletedProcess:
     """
     Запускает скрипт внутри контейнера с передачей переменных окружения.
@@ -216,12 +235,7 @@ class TestSessionLifecycle:
         assert result.returncode == 0, f"client_connect should return 0: {result.stderr}"
         
         # Проверяем что сессия создана в БД (JOIN с accounts для поиска по cn)
-        db_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_client_e2e'"],
-            capture_output=True,
-            text=True
-        )
+        db_result = mysql_query("SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_client_e2e'")
         assert "1" in db_result.stdout or "2" in db_result.stdout, "Session should be created in database"
 
     def test_e6_4_session_closed_on_disconnect(self, docker_compose_up):
@@ -245,12 +259,7 @@ class TestSessionLifecycle:
         assert result.returncode == 0, f"client_disconnect should return 0: {result.stderr}"
         
         # Проверяем что сессия закрыта (JOIN с accounts для поиска по cn)
-        db_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT s.status FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_disconnect_e2e' ORDER BY s.id DESC LIMIT 1"],
-            capture_output=True,
-            text=True
-        )
+        db_result = mysql_query("SELECT s.status FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_disconnect_e2e' ORDER BY s.id DESC LIMIT 1")
         assert "closed" in db_result.stdout, "Session should be closed"
 
     def test_e6_5_orphaned_session_on_reconnect(self, docker_compose_up):
@@ -267,12 +276,7 @@ class TestSessionLifecycle:
         run_in_container_with_env("openvpn-server", "/app/collector/client_connect.py", env)
         
         # Проверяем что есть активная сессия (JOIN с accounts для поиска по cn)
-        check_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='active'"],
-            capture_output=True,
-            text=True
-        )
+        check_result = mysql_query("SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='active'")
         initial_count = int(check_result.stdout.strip().split('\n')[-1])
         assert initial_count >= 1, "Should have at least one active session"
         
@@ -284,21 +288,11 @@ class TestSessionLifecycle:
         assert result.returncode == 0, f"client_connect should return 0: {result.stderr}"
         
         # Проверяем что старая сессия помечена как error (JOIN с accounts для поиска по cn)
-        orphan_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='error'"],
-            capture_output=True,
-            text=True
-        )
+        orphan_result = mysql_query("SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='error'")
         assert "1" in orphan_result.stdout, "Old session should be marked as error (orphaned)"
         
         # Проверяем что создана новая активная сессия (JOIN с accounts для поиска по cn)
-        new_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='active' AND s.source_ip='192.168.100.103'"],
-            capture_output=True,
-            text=True
-        )
+        new_result = mysql_query("SELECT COUNT(*) FROM sessions s JOIN accounts a ON s.account_id=a.id WHERE a.cn='test_reconnect_e2e' AND s.status='active' AND s.source_ip='192.168.100.103'")
         assert "1" in new_result.stdout, "New session should be created with new IP"
 
 
@@ -343,59 +337,45 @@ class TestSyncAllSessionCleanup:
         assert "session cleanup" in result.stdout.lower() or "sync_all.py" in result.stderr.lower(), \
             "sync_all should mention session cleanup"
 
-    def test_e6_6_session_cleanup_script_runs(self, docker_compose_up):
+    def test_session_cleanup_is_fail_closed_without_clients(self, docker_compose_up):
         """
-        E6.6: session_cleanup.py запускается отдельно и очищает orphaned сессии.
+        C1.7: при отсутствии подключённых клиентов cleanup НИЧЕГО не трогает.
+
+        Пустой ответ Management Interface не означает «никто не подключён» —
+        сокет мог быть недоступен или перезапущен. Если бы cleanup доверял
+        такому ответу, он разом пометил бы error все живые сессии.
+
+        Раньше этот тест утверждал обратное (ждал, что сессия станет error) и
+        противоречил инварианту, зафиксированному в коде.
         """
-        # Создаем сессию вручную в БД с "зависшим" статусом
-        subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", """
-                INSERT INTO accounts (cn, serial_number, created_at, updated_at)
-                VALUES ('test_direct_cleanup', 'direct_test_serial', NOW(), NOW())
-             """],
-            capture_output=True,
-            text=True
+        mysql_query(
+            "INSERT INTO accounts (cn, serial_number, created_at, updated_at) "
+            "VALUES ('test_direct_cleanup', 'direct_test_serial', NOW(), NOW())"
         )
-        
-        # Получаем account_id
-        get_id = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", "SELECT id FROM accounts WHERE cn='test_direct_cleanup'"],
-            capture_output=True,
-            text=True
+        get_id = mysql_query("SELECT id FROM accounts WHERE cn='test_direct_cleanup'")
+        account_id = get_id.stdout.strip().splitlines()[-1]
+
+        # «Зависшая» активная сессия старше snapshot_time
+        mysql_query(
+            "INSERT INTO sessions (account_id, connected_at, source_ip, status) "
+            f"VALUES ({account_id}, DATE_SUB(NOW(), INTERVAL 2 HOUR), "
+            "'192.168.100.200', 'active')"
         )
-        account_id = get_id.stdout.strip().split('\n')[-1]
-        
-        # Создаем "зависшую" сессию
-        subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", f"""
-                INSERT INTO sessions (account_id, connected_at, source_ip, status)
-                VALUES ({account_id}, DATE_SUB(NOW(), INTERVAL 2 HOUR), '192.168.100.200', 'active')
-             """],
-            capture_output=True,
-            text=True
-        )
-        
-        # Запускаем session_cleanup.py напрямую
+
         result = subprocess.run(
             ["docker", "exec", "openvpn-server", "python", "/app/collector/session_cleanup.py"],
-            capture_output=True,
-            text=True,
-            timeout=60
+            capture_output=True, text=True, timeout=60,
         )
-        
-        assert result.returncode == 0, f"session_cleanup should return 0: {result.stderr}"
-        
-        # Проверяем что сессия помечена как error
-        check_result = subprocess.run(
-            ["docker", "exec", "openvpn-mysql", "mysql", "-uopenvpn", "-popenvpn_password", 
-             "openvpn_logs", "-e", f"SELECT status FROM sessions WHERE account_id={account_id}"],
-            capture_output=True,
-            text=True
+        assert result.returncode == 0, f"session_cleanup должен вернуть 0: {result.stderr}"
+
+        check = mysql_query(f"SELECT status FROM sessions WHERE account_id={account_id}")
+        assert "active" in check.stdout, (
+            "Сессия должна остаться active: клиентов в mgmt нет, "
+            "значит данным доверять нельзя и cleanup обязан пропустить работу"
         )
-        assert "error" in check_result.stdout, "Session should be marked as error by session_cleanup"
+        assert "error" not in check.stdout, (
+            "Нарушен инвариант C1.7 — cleanup закрыл сессию по пустому ответу mgmt"
+        )
 
 
 class TestContainerLogs:

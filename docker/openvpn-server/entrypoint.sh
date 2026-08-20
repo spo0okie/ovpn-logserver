@@ -258,6 +258,26 @@ main() {
     mkdir -p /var/log/openvpn /var/log/openvpn-logserver
     touch /var/log/openvpn/openvpn.log /var/log/openvpn/openvpn-status.log
     
+    # Периодическая синхронизация — аналог systemd-таймера openvpn-sync.timer
+    # на проде. Без неё в стенде не проверяется основной фоновый контур
+    # (cert_sync -> crl_checker -> ccd_checker -> session_cleanup), и запускать
+    # его приходилось руками через docker exec.
+    # SYNC_INTERVAL=0 отключает цикл.
+    SYNC_INTERVAL="${SYNC_INTERVAL:-300}"
+    if [ "$SYNC_INTERVAL" -gt 0 ] 2>/dev/null; then
+        log "Periodic sync enabled: every ${SYNC_INTERVAL}s"
+        (
+            while true; do
+                sleep "$SYNC_INTERVAL"
+                python3 /app/collector/sync_all.py \
+                    >> /var/log/openvpn-logserver/sync.log 2>&1 \
+                    || log "sync_all завершился с ошибкой (см. sync.log)"
+            done
+        ) &
+    else
+        log "Periodic sync disabled (SYNC_INTERVAL=0)"
+    fi
+
     log "Starting OpenVPN server..."
     
     # ЗАПУСК OpenVPN

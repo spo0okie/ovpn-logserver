@@ -70,6 +70,9 @@ services:
       - CRL_FILE=/etc/openvpn/crl.pem
       - CCD_DIR=/etc/openvpn/ccd
       - OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt.sock
+      # Интервал фоновой синхронизации в секундах (аналог openvpn-sync.timer).
+      # 0 отключает цикл.
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
     depends_on:
       mysql:
         condition: service_healthy

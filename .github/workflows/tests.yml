@@ -1,0 +1,82 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Юнит и интеграционные (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r web/requirements.txt \
+                      -r collector/requirements.txt \
+                      -r database/requirements.txt
+
+      # Конфиги config/*.yaml в репозитории отсутствуют намеренно.
+      # Тестовое окружение задаётся через ENV в корневом conftest.py —
+      # это заодно проверяет, что приложение работает без yaml-файлов.
+      - name: Тесты
+        run: pytest -q
+
+  schema:
+    name: Схема на реальном MySQL
+    runs-on: ubuntu-latest
+    # Тесты схемы ловят то, что SQLite пропускает: UNSIGNED, ENUM, поведение FK.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: openvpn_logs
+          MYSQL_USER: openvpn_user
+          MYSQL_PASSWORD: ci_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root --password=ci_root_password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r database/requirements.txt -r collector/requirements.txt
+
+      - name: Применение миграций
+        working-directory: database
+        env:
+          DATABASE_URL: mysql+pymysql://openvpn_user:ci_password@127.0.0.1:3306/openvpn_logs
+        run: alembic upgrade head
+
+      # database/tests подключаются напрямую через pymysql и читают TEST_DB_*
+      # (см. TEST_DB_CONFIG в test_schema.py), а не DB_*/DATABASE_URL.
+      - name: Тесты схемы
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: '3306'
+          TEST_DB_NAME: openvpn_logs
+          TEST_DB_USER: openvpn_user
+          TEST_DB_PASSWORD: ci_password
+        run: pytest database/tests -q

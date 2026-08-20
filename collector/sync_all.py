@@ -19,9 +19,15 @@
 import sys
 import os
 import logging
+from contextlib import contextmanager
 
 # Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    import fcntl  # POSIX-only; на Windows блокировка недоступна (см. sync_lock)
+except ImportError:  # pragma: no cover - ветка только для Windows
+    fcntl = None
 
 from core.database import SessionLocal
 from collector.cert_sync import sync_certificates
@@ -31,6 +37,65 @@ from collector.session_cleanup import cleanup_orphaned_sessions
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
+
+# Путь к lock-файлу: переопределяется через ENV для тестов и нестандартных установок
+LOCK_PATH = os.getenv("SYNC_LOCK_PATH", "/var/run/openvpn-logserver/sync.lock")
+
+
+class SyncAlreadyRunning(Exception):
+    """Другой процесс синхронизации уже держит lock."""
+
+
+@contextmanager
+def sync_lock(lock_path: str = None):
+    """
+    Не даёт двум синхронизациям идти одновременно.
+
+    Актуально при ручном запуске поверх systemd-таймера: две параллельные
+    сессии могут ставить противоречивые пометки (например, одна закрывает
+    сессию как orphaned, пока вторая её обновляет).
+
+    Блокировка неблокирующая: если lock занят, поднимается SyncAlreadyRunning,
+    и вызывающий завершает работу штатно — это не ошибка.
+
+    Используется именно flock, а не fcntl.lockf: POSIX-локи (lockf) привязаны к
+    процессу, поэтому второй запуск ВНУТРИ того же процесса их не заметит, а
+    flock привязан к описанию открытого файла и конфликтует корректно.
+
+    На Windows fcntl отсутствует, блокировка не применяется (прод — Linux).
+    """
+    path = lock_path or LOCK_PATH
+
+    if fcntl is None:
+        logger.debug("fcntl недоступен (не POSIX) — синхронизация без блокировки")
+        yield
+        return
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError as exc:
+        # Каталог создать не удалось — не повод срывать синхронизацию
+        logger.warning("Не удалось создать каталог для lock-файла %s: %s", path, exc)
+        yield
+        return
+
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            raise SyncAlreadyRunning(path)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def run_sync():
@@ -120,7 +185,16 @@ def run_sync():
 
 def main():
     """Точка входа для запуска синхронизации."""
-    exit_code = run_sync()
+    try:
+        with sync_lock():
+            exit_code = run_sync()
+    except SyncAlreadyRunning as exc:
+        # Не ошибка: таймер сработал, пока предыдущий запуск ещё идёт.
+        # Возвращаем 0, иначе systemd будет считать это сбоем юнита.
+        print(f"Синхронизация уже выполняется (lock: {exc}), пропускаем запуск",
+              file=sys.stderr)
+        logger.info("Синхронизация уже выполняется, запуск пропущен")
+        sys.exit(0)
     sys.exit(exit_code)
 
 

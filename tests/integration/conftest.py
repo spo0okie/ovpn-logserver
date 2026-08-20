@@ -144,15 +144,17 @@ def api_client(engine, tables):
     Yields:
         TestClient: Клиент для тестирования API
     """
-    # Создаем новую сессию для API
+    # Каждый запрос получает СВОЮ сессию — как в проде (get_db создаёт сессию
+    # на запрос). Раньше все запросы делили один объект Session, а он не
+    # потокобезопасен: тест с параллельными запросами падал примерно раз из трёх.
     Session = sessionmaker(bind=engine)
-    db = Session()
-    
+
     def _get_db_override():
+        request_db = Session()
         try:
-            yield db
+            yield request_db
         finally:
-            pass
+            request_db.close()
     
     # Роуты зависят от web.dependencies.get_db — это другой объект функции,
     # чем core.database.get_db; FastAPI сопоставляет подмены по объекту.
@@ -163,7 +165,6 @@ def api_client(engine, tables):
         yield client
 
     app.dependency_overrides.clear()
-    db.close()
 
 
 @pytest.fixture

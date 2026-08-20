@@ -272,3 +272,46 @@ class TestFullIntegration:
             expected_order = ['cert_sync', 'crl_checker', 'ccd_checker', 'session_cleanup']
             assert call_order == expected_order, \
                 f"Неправильный порядок вызовов: {call_order} != {expected_order}"
+
+
+class TestSyncLock:
+    """
+    Защита от параллельного запуска sync_all (ручной запуск поверх таймера).
+    """
+
+    def test_lock_is_released_after_use(self, tmp_path):
+        """Повторный вход в lock после выхода должен проходить."""
+        from collector.sync_all import sync_lock
+        lock = str(tmp_path / "sync.lock")
+
+        with sync_lock(lock):
+            pass
+        with sync_lock(lock):
+            pass  # если бы lock не снимался, здесь было бы SyncAlreadyRunning
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl только на POSIX")
+    def test_second_process_is_rejected(self, tmp_path):
+        """Второй параллельный вход должен получить SyncAlreadyRunning."""
+        from collector.sync_all import sync_lock, SyncAlreadyRunning
+        lock = str(tmp_path / "sync.lock")
+
+        with sync_lock(lock):
+            with pytest.raises(SyncAlreadyRunning):
+                with sync_lock(lock):
+                    pass
+
+    def test_main_exits_zero_when_locked(self, tmp_path, mocker):
+        """
+        Занятый lock — не ошибка: main() завершается с кодом 0, иначе systemd
+        посчитает пропуск запуска сбоем юнита.
+        """
+        from collector import sync_all
+        mocker.patch.object(sync_all, 'sync_lock',
+                            side_effect=sync_all.SyncAlreadyRunning('/tmp/x.lock'))
+        run = mocker.patch.object(sync_all, 'run_sync')
+
+        with pytest.raises(SystemExit) as exc:
+            sync_all.main()
+
+        assert exc.value.code == 0
+        run.assert_not_called()
