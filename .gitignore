@@ -47,3 +47,6 @@ screenshots/
 # OS
 Thumbs.db
 .DS_Store
+
+# Локальный runbook по ротации секретов (не для публикации)
+SECRETS-ROTATION.local.md

@@ -57,11 +57,24 @@ alembic -c database/alembic.ini revision -m "описание"
 
 - **Hooks не ломают VPN**: `client_connect.py`/`client_disconnect.py` при ЛЮБОЙ ошибке возвращают exit 0. Ненулевой exit из client-connect заблокирует подключение клиента.
 - **Серийные номера сертификатов** — всегда через `core.serial.normalize_serial()` (канон — decimal-строка). OpenVPN отдаёт decimal, cryptography — int, старые данные — вперемешку; прямое сравнение без нормализации даёт дубли accounts.
-- **Схема БД имеет несколько источников правды**: `database/init.sql`, `docker/mysql/init.sql`, миграции Alembic и `core/models.py`. Любое изменение схемы — согласованно во всех местах.
+- **Схема БД имеет несколько источников правды**: миграции Alembic (канон), `database/init.sql` и `core/models.py`. Любое изменение схемы — согласованно во всех местах. `docker/mysql/init.sql` таблиц НЕ создаёт (только `ALTER DATABASE`) — иначе конфликт с `alembic upgrade head` и crash-loop web-контейнера.
 - **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. E2E в Docker — единственная проверка на реальном MySQL.
-- **Время**: в коде исторически смешаны naive `datetime.utcnow()` и aware `datetime.now(timezone.utc)` — сравнение их кидает `TypeError`. При правках придерживаться стиля окружающего кода, отображение — через `web/utils/timezone.py`. Контекст: `plans/timezone-fix.md`.
+- **Время**: в коде исторически смешаны naive `datetime.utcnow()` и aware `datetime.now(timezone.utc)` — сравнение их кидает `TypeError`. При правках придерживаться стиля окружающего кода, отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
+- **Прямой вызов функций API из UI-роутов**: FastAPI не применяет `Query(...)` — незаданные аргументы приходят объектами `Query`, а не значениями по умолчанию, и попадают в SQL. Передавать все параметры явно (см. `web/routes/pages.py`).
 - **Паттерн тестовых conftest**: `DATABASE_URL` и auth-ENV выставляются ДО импорта `web.main`/`core.database`, затем `reload_config()` — иначе закешируется реальный конфиг.
 
 ## Документация
 
-`plans/` — проектная документация: `database-schema.md`, `api-design.md`, `collector-design.md`, `deployment.md`, `development-plan.md` и планы фич (`session-cleanup.md`, `multi-certificate-support.md`, `timezone-fix.md`). `tz.md` в корне — исходное ТЗ.
+`docs/` — проектная документация:
+
+- `invariants.md` — расшифровка кодов `I4.5`, `C1.7`, `M1.4`, `S3.2` из докстрингов. **Читать перед правкой collector'а**: там же обоснование fail-closed-логики очистки сессий.
+- `architecture.md` — компоненты, границы модулей, почему хуки вместо разбора логов.
+- `database.md` — схема, миграции, расхождение моделей и MySQL-типов.
+- `api.md` — контракт REST API (multi-cert: список агрегирован по CN).
+- `multi-certificate.md` — модель «строка = сертификат», нормализация серийников, `legacy_*`.
+- `openvpn-setup.md` — что обязано быть в `server.conf`, иначе collector молча не собирает данные.
+- `deployment.md` — развёртывание и systemd.
+- `timezone.md` — naive-UTC в БД, конвертация на границе отображения.
+- `known-gaps.md` — что заявлено, но не работает (в т.ч. `connection_attempts` не заполняется).
+
+`tz.md` в корне — исходное ТЗ. `README.md` — точка входа для внешнего читателя.

@@ -359,6 +359,6 @@ database:
 
 ## Ссылки
 
-- [Документация по развертыванию](../plans/deployment.md)
-- [Документация Docker окружения](../plans/docker-environment.md)
+- [Развёртывание и systemd](../docs/deployment.md)
+- [Архитектура и конфигурация](../docs/architecture.md)
 - [Документация по миграциям](../database/README.md)

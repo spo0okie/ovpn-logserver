@@ -29,7 +29,7 @@ pip install -r collector/requirements.txt
 # Настройка базы данных
 mysql -u root -p <<EOF
 CREATE DATABASE IF NOT EXISTS openvpn_logs CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'REDACTED_DB_PASSWORD';
+CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'СМЕНИТЕ_ПАРОЛЬ_БД';
 GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -37,13 +37,15 @@ EOF
 # Применение миграций
 cd database && alembic upgrade head && cd ..
 
-# Создание директории для конфигов
-mkdir -p /etc/openvpn-logserver/config
-
-# Копирование конфигурации
-cp config/database.yaml /etc/openvpn-logserver/config
-cp config/auth.yaml /etc/openvpn-logserver/config
-cp config/web.yaml /etc/openvpn-logserver/config
+# Конфигурация: заполнить config/*.yaml в каталоге проекта.
+# ВАЖНО: core/config.py читает ТОЛЬКО <каталог проекта>/config —
+# отдельный /etc/openvpn-logserver/config приложение не увидит.
+# Альтернатива: не создавать yaml вовсе и задать всё через ENV
+# (DATABASE_URL, WEB_AUTH_USERNAME, WEB_AUTH_PASSWORD_HASH) —
+# файлы конфигурации не обязательны.
+cp config/database.yaml.example config/database.yaml
+cp config/auth.yaml.example     config/auth.yaml
+cp config/web.yaml.example      config/web.yaml
 
 # Создание директории для логов
 mkdir -p /opt/openvpn-logserver/logs
@@ -111,15 +113,23 @@ chmod +x /etc/openvpn/scripts/client-disconnect
 Добавьте в `/etc/openvpn/server.conf`:
 
 ```conf
+# ОБЯЗАТЕЛЬНО: без script-security 2 OpenVPN 2.6 не исполняет внешние
+# скрипты — хуки молча не отработают, и сессии не попадут в БД
+script-security 2
+
 # Скрипты логирования
 client-connect /etc/openvpn/scripts/client-connect
 client-disconnect /etc/openvpn/scripts/client-disconnect
 
-# Передача переменных окружения скриптам
-setenv-safe common_name
-setenv-safe trusted_ip
-setenv-safe ifconfig_pool_remote_ip
+# Нужен для обнаружения оборванных сессий (session_cleanup)
+management /run/openvpn/mgmt.sock unix
 ```
+
+`common_name`, `trusted_ip`, `ifconfig_pool_remote_ip` и `tls_serial_0` OpenVPN
+передаёт хукам сам — перечислять их через `setenv-safe` не нужно и вредно:
+директива добавляет к имени префикс `OPENVPN_`.
+
+Полный список требований к server.conf — [openvpn-setup.md](openvpn-setup.md).
 
 Перезапустите OpenVPN:
 ```bash
@@ -139,14 +149,18 @@ journalctl -u openvpn@server -f
 
 ### 3. Настройка конфигурации
 
-Отредактируйте `/etc/openvpn-logserver/config/database.yaml`:
-- Установите `password` - пароль для подключения к БД (в открытом виде)
+Отредактируйте `config/database.yaml` в каталоге проекта:
+- `password` — пароль для подключения к БД
 
-Отредактируйте `/etc/openvpn-logserver/config/auth.yaml`:
-- Установите `username` и `password` для доступа к Web UI
+Отредактируйте `config/auth.yaml`:
+- `username` и `password_hash` (bcrypt) для доступа к Web UI.
+  Plaintext-поле `password` поддержано как legacy и выводит предупреждение.
+  Сгенерировать хеш:
+  `python3 -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"`
 
-Отредактируйте `/etc/openvpn-logserver/config/web.yaml`:
-- Установите `secret_key` (случайная строка минимум 32 символа)
+Отредактируйте `config/web.yaml`:
+- `debug: false` для прода (иначе будут открыты `/docs` и `/openapi.json`)
+- `cors.allow_origins` — список доменов; при `["*"]` CORS отключается целиком
 
 ### 4. Запуск
 
@@ -179,7 +193,7 @@ systemctl list-timers openvpn-sync.timer
 journalctl -u openvpn-web -f
 
 # API check
-curl -u admin:admin_password_123 http://localhost:8000/api/v1/stats/overview
+curl -u admin:СМЕНИТЕ_ПАРОЛЬ_АДМИНА http://localhost:8000/api/v1/stats/overview
 ```
 
 ---
@@ -262,7 +276,7 @@ sudo -u ovpn-logserver mkdir -p logs
 # Создать базу данных и пользователя
 sudo mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS openvpn_logs CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'REDACTED_DB_PASSWORD';
+CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost' IDENTIFIED BY 'СМЕНИТЕ_ПАРОЛЬ_БД';
 GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
 FLUSH PRIVILEGES;
 EOF
@@ -287,7 +301,7 @@ database:
   port: 3306
   name: openvpn_logs
   user: openvpn_user
-  password: REDACTED_DB_PASSWORD  # Пароль в открытом виде
+  password: СМЕНИТЕ_ПАРОЛЬ_БД  # Пароль в открытом виде
 
   # Параметры пула соединений
   pool_size: 10
@@ -307,7 +321,7 @@ sudo tee /opt/openvpn-logserver/config/auth.yaml <<EOF
 auth:
   web:
     username: admin
-    password: admin_password_123  # Пароль в открытом виде
+    password: СМЕНИТЕ_ПАРОЛЬ_АДМИНА  # Пароль в открытом виде
 EOF
 
 # Создать конфигурацию web приложения
@@ -632,7 +646,7 @@ sudo journalctl -u openvpn-sync -f
 
 ```bash
 # Проверка web приложения
-curl -u admin:admin_password_123 http://localhost:8000/api/v1/stats/overview
+curl -u admin:СМЕНИТЕ_ПАРОЛЬ_АДМИНА http://localhost:8000/api/v1/stats/overview
 
 # Проверка БД
 mysql -u openvpn_user -p -e "SELECT 1 FROM accounts LIMIT 1;" openvpn_logs
