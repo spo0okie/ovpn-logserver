@@ -15,6 +15,7 @@
 import ipaddress
 import logging
 from datetime import datetime, timedelta
+from core.time import utcnow
 from typing import Optional
 
 import requests
@@ -123,7 +124,7 @@ def _save_to_cache(db: Session, ip: str, data: dict, ttl: Optional[timedelta] = 
     # Рассчитываем время истечения кэша
     if ttl is None:
         ttl = timedelta(days=CACHE_TTL_DAYS)
-    expires_at = datetime.utcnow() + ttl
+    expires_at = utcnow() + ttl
     
     # Проверяем, есть ли уже запись для этого IP
     cache_entry = db.query(GeoIPCache).filter(GeoIPCache.ip == ip).first()
@@ -137,7 +138,7 @@ def _save_to_cache(db: Session, ip: str, data: dict, ttl: Optional[timedelta] = 
         cache_entry.latitude = data.get('latitude')
         cache_entry.longitude = data.get('longitude')
         cache_entry.isp = data.get('isp')
-        cache_entry.cached_at = datetime.utcnow()
+        cache_entry.cached_at = utcnow()
         cache_entry.expires_at = expires_at
     else:
         # Создаем новую запись
@@ -150,7 +151,7 @@ def _save_to_cache(db: Session, ip: str, data: dict, ttl: Optional[timedelta] = 
             latitude=data.get('latitude'),
             longitude=data.get('longitude'),
             isp=data.get('isp'),
-            cached_at=datetime.utcnow(),
+            cached_at=utcnow(),
             expires_at=expires_at
         )
         db.add(cache_entry)

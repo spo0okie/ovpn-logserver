@@ -20,6 +20,7 @@ import subprocess
 import time
 import socket
 from datetime import datetime, timedelta
+from core.time import utcnow
 from pathlib import Path
 
 # Add parent directories to path for imports
@@ -226,7 +227,7 @@ class TestSessionLifecycle:
             "tls_serial_0": "e2e_test_serial",
             "trusted_port": "12345",
             "ifconfig_pool_remote_ip": "10.8.0.100",
-            "time_unix": str(int(datetime.utcnow().timestamp()))
+            "time_unix": str(int(utcnow().timestamp()))
         }
 
         result = run_in_container_with_env("openvpn-server", "/app/collector/client_connect.py", env)
@@ -252,7 +253,7 @@ class TestSessionLifecycle:
         run_in_container_with_env("openvpn-server", "/app/collector/client_connect.py", env)
         
         # Запускаем client_disconnect скрипт
-        env["connected_at"] = str(int(datetime.utcnow().timestamp()))
+        env["connected_at"] = str(int(utcnow().timestamp()))
         
         result = run_in_container_with_env("openvpn-server", "/app/collector/client_disconnect.py", env)
         

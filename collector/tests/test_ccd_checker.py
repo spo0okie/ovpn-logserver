@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
+from core.time import utcfromtimestamp, utcnow
 
 import pytest
 
@@ -67,7 +68,7 @@ class TestI63CcdUpdatesStatus:
         и устанавливает ccd_updated_at для accounts с CCD файлами.
         """
         # Создаем CCD файл
-        mtime = datetime.utcnow() - timedelta(days=1)
+        mtime = utcnow() - timedelta(days=1)
         create_ccd_file('client_with_ccd', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path, mtime)
         
         # Создаем account
@@ -99,7 +100,7 @@ class TestI63CcdUpdatesStatus:
         для accounts без CCD файлов.
         """
         # Создаем account с has_ccd=True (CCD файл был удален)
-        old_mtime = datetime.utcnow() - timedelta(days=7)
+        old_mtime = utcnow() - timedelta(days=7)
         account = Account(
             cn='client_without_ccd',
             has_ccd=True,
@@ -187,7 +188,7 @@ class TestI63CcdUpdatesStatus:
         # Сравниваем с точностью до секунды (так как mtime имеет ограниченную точность)
         assert account.ccd_updated_at is not None
         # ccd_updated_at хранится в naive-UTC (utcfromtimestamp от epoch файла).
-        expected = datetime.utcfromtimestamp(mtime.timestamp())
+        expected = utcfromtimestamp(mtime.timestamp())
         assert abs((account.ccd_updated_at - expected).total_seconds()) < 2
 
 
@@ -207,7 +208,7 @@ class TestI64Idempotency:
         Проверяем что повторный запуск не ломает данные.
         """
         # Создаем CCD файл
-        mtime = datetime.utcnow() - timedelta(days=1)
+        mtime = utcnow() - timedelta(days=1)
         create_ccd_file('client', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path, mtime)
         
         # Создаем account
@@ -241,7 +242,7 @@ class TestI64Idempotency:
         mocker.patch('collector.ccd_checker.CCD_DIR', '/nonexistent/path')
         
         # Создаем account
-        account = Account(cn='client', has_ccd=True, ccd_updated_at=datetime.utcnow())
+        account = Account(cn='client', has_ccd=True, ccd_updated_at=utcnow())
         db.add(account)
         db.commit()
         
@@ -336,8 +337,8 @@ class TestHelperFunctions:
         Тест find_ccd_files.
         """
         # Создаем несколько CCD файлов
-        mtime1 = datetime.utcnow() - timedelta(days=1)
-        mtime2 = datetime.utcnow() - timedelta(days=2)
+        mtime1 = utcnow() - timedelta(days=1)
+        mtime2 = utcnow() - timedelta(days=2)
         
         create_ccd_file('client1', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path, mtime1)
         create_ccd_file('client2', 'ifconfig-push 10.8.0.11 255.255.255.0', tmp_path, mtime2)
@@ -353,8 +354,8 @@ class TestHelperFunctions:
         assert 'client2' in files
         
         # mtime хранится в naive-UTC (utcfromtimestamp от epoch файла)
-        expected1 = datetime.utcfromtimestamp(mtime1.timestamp())
-        expected2 = datetime.utcfromtimestamp(mtime2.timestamp())
+        expected1 = utcfromtimestamp(mtime1.timestamp())
+        expected2 = utcfromtimestamp(mtime2.timestamp())
         assert abs((files['client1'] - expected1).total_seconds()) < 2
         assert abs((files['client2'] - expected2).total_seconds()) < 2
 

@@ -35,7 +35,7 @@ alembic -c database/alembic.ini upgrade head
 alembic -c database/alembic.ini revision -m "описание"
 ```
 
-Зависимости раздельные: `web/requirements.txt`, `collector/requirements.txt`, `database/requirements.txt` — для разработки ставить все три.
+Зависимости раздельные: `web/requirements.txt`, `collector/requirements.txt`, `database/requirements.txt` — для разработки ставить все три плюс `requirements-dev.txt` (pytest и прочее только для тестов). Версии зафиксированы через `==` на проверенных тестами; lock-файла с транзитивными зависимостями пока нет.
 
 ## Архитектура
 
@@ -59,7 +59,7 @@ alembic -c database/alembic.ini revision -m "описание"
 - **Серийные номера сертификатов** — всегда через `core.serial.normalize_serial()` (канон — decimal-строка). OpenVPN отдаёт decimal, cryptography — int, старые данные — вперемешку; прямое сравнение без нормализации даёт дубли accounts.
 - **Схема БД имеет несколько источников правды**: миграции Alembic (канон), `database/init.sql` и `core/models.py`. Любое изменение схемы — согласованно во всех местах. `docker/mysql/init.sql` таблиц НЕ создаёт (только `ALTER DATABASE`) — иначе конфликт с `alembic upgrade head` и crash-loop web-контейнера.
 - **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. E2E в Docker — единственная проверка на реальном MySQL.
-- **Время**: в коде исторически смешаны naive `datetime.utcnow()` и aware `datetime.now(timezone.utc)` — сравнение их кидает `TypeError`. При правках придерживаться стиля окружающего кода, отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
+- **Время**: канон хранения — naive UTC, получать только через `core.time.utcnow()` / `utcfromtimestamp()` (не `datetime.utcnow()` — он устарел, и не `datetime.now(timezone.utc)` — aware-время при сравнении с БД даёт `TypeError`). Исключение: `web/auth.py` (файловые сессии, aware, БД не касается). Отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
 - **Прямой вызов функций API из UI-роутов**: FastAPI не применяет `Query(...)` — незаданные аргументы приходят объектами `Query`, а не значениями по умолчанию, и попадают в SQL. Передавать все параметры явно (см. `web/routes/pages.py`).
 - **Переводы строк**: исполняемые файлы (`collector/openvpn_scripts/*`, `docker/**/entrypoint.sh`) обязаны быть в LF. При CRLF шебанг превращается в `#!/usr/bin/env python3`, интерпретатор не находится, хук возвращает ненулевой код и OpenVPN отказывает клиентам. Защита — `.gitattributes` с `* text=auto eol=lf`; при записи файлов из Python указывать `newline='
 '`.

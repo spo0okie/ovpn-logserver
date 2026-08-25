@@ -29,6 +29,8 @@ from typing import List, Optional, Set, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.time import utcnow
+
 from core.database import SessionLocal  # noqa: E402
 from core.models import Session  # noqa: E402
 
@@ -105,7 +107,7 @@ def cleanup_orphaned_sessions(
     """
     logger.info("Starting orphaned session cleanup")
 
-    snapshot_time = datetime.utcnow()
+    snapshot_time = utcnow()
 
     if connected_cns is None:
         try:
@@ -172,7 +174,7 @@ def mark_session_as_orphaned(db, session: Session) -> None:
     """Помечает одну сессию как orphaned и коммитит. Используется в тестах."""
     cn = session.account.cn if session.account else "unknown"
     session.status = "error"
-    session.disconnected_at = datetime.utcnow()
+    session.disconnected_at = utcnow()
     db.commit()
     logger.info(
         "Orphaned session marked as error: id=%s, cn=%s, disconnected_at=%s",

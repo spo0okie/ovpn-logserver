@@ -11,6 +11,7 @@ import ast
 import os
 import sys
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 import pytest
 from cryptography import x509
@@ -104,8 +105,8 @@ def create_test_crl(revoked_serials: dict, tmp_path, issuer_cn: str = "Test CA")
     # Создаем CRL
     builder = x509.CertificateRevocationListBuilder()
     builder = builder.issuer_name(issuer)
-    builder = builder.last_update(datetime.utcnow())
-    builder = builder.next_update(datetime.utcnow() + timedelta(days=7))
+    builder = builder.last_update(utcnow())
+    builder = builder.next_update(utcnow() + timedelta(days=7))
     
     for revoked_cert in revoked_certs:
         builder = builder.add_revoked_certificate(revoked_cert)
@@ -139,7 +140,7 @@ class TestI62CrlUpdatesRevocation:
         Проверяем что check_crl корректно отмечает is_revoked=True
         для сертификатов в CRL. Теперь используется serial_number из account.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификат
         cert_path, serial = create_test_certificate('revoked_client', now, now + timedelta(days=365), tmp_path)
@@ -176,7 +177,7 @@ class TestI62CrlUpdatesRevocation:
         Проверяем что check_crl сбрасывает is_revoked=False
         для сертификатов не в CRL (идемпотентность).
         """
-        now = datetime.utcnow()
+        now = utcnow()
         
         # Создаем сертификат (нужен для маппинга CN -> serial)
         cert_path, serial = create_test_certificate('restored_client', now, now + timedelta(days=365), tmp_path)
@@ -216,7 +217,7 @@ class TestI62CrlUpdatesRevocation:
         Тест I6.2: Проверка нескольких accounts.
         Теперь используется serial_number из account напрямую.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификаты
         cert1_path, serial1 = create_test_certificate('client1', now, now + timedelta(days=365), tmp_path)
@@ -275,7 +276,7 @@ class TestI64Idempotency:
         Проверяем что повторный запуск не ломает данные.
         Теперь используется serial_number из account напрямую.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификат
         cert_path, serial = create_test_certificate('client', now, now + timedelta(days=365), tmp_path)
@@ -335,7 +336,7 @@ class TestI65UpdateOnly:
         """
         Тест I6.5: Проверяем что CRL checker не создает accounts.
         """
-        now = datetime.utcnow()
+        now = utcnow()
         
         # Создаем CRL с серийными номерами
         crl_path = create_test_crl({12345: now}, tmp_path)
@@ -398,7 +399,7 @@ class TestHelperFunctions:
         """
         Тест parse_crl.
         """
-        now = datetime.utcnow()
+        now = utcnow()
         
         # Создаем CRL
         revoked_serials = {12345: now - timedelta(days=1)}

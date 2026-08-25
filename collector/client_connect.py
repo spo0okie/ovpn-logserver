@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Любой сбой импорта фиксируем и обрабатываем внутри main() с exit 0.
 try:
     from sqlalchemy.dialects.mysql import insert
+    from core.time import utcfromtimestamp, utcnow
     from core.database import SessionLocal, engine
     from core.models import Account, Session, Base
     from core.geoip import resolve_geoip
@@ -160,7 +161,7 @@ def create_or_get_account(db, cn: str, serial_number: str = "unknown"):
     """
     logger.debug(f"Creating or getting account for CN='{cn}', serial='{serial_number}'")
 
-    now = datetime.utcnow()
+    now = utcnow()
 
     # Проверяем диалект БД для выбора правильного синтаксиса UPSERT
     dialect_name = db.bind.dialect.name
@@ -256,7 +257,7 @@ def close_orphaned_session(db, session: Session):
         session: Сессия для закрытия
     """
     session.status = 'error'
-    session.disconnected_at = datetime.utcnow()
+    session.disconnected_at = utcnow()
     # flush, а не commit: закрытие orphaned и создание новой сессии должны быть
     # одной транзакцией, иначе при сбое между ними остаётся состояние
     # «старая закрыта, новая не создана». Коммитит вызывающий client_connect().
@@ -311,10 +312,10 @@ def create_session(db, account_id: int, env_vars: dict, geo: dict):
     Invariant I4.3, I4.6: Только INSERT, статус 'active'
     """
     # Разбираем тайстамп из time_unix если есть, иначе используем текущее время
-    connected_at = datetime.utcnow()
+    connected_at = utcnow()
     if env_vars.get('time_unix'):
         try:
-            connected_at = datetime.utcfromtimestamp(int(env_vars['time_unix']))
+            connected_at = utcfromtimestamp(int(env_vars['time_unix']))
             logger.debug(f"Using time_unix timestamp: {connected_at}")
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid time_unix value '{env_vars['time_unix']}': {e}, using current time")

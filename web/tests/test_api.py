@@ -4,6 +4,7 @@
 
 import base64
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 import pytest
 from fastapi.testclient import TestClient
@@ -99,8 +100,8 @@ class TestStatsAPI:
 
     def test_connections_stats(self, client: TestClient, sample_sessions: list, auth_headers: dict):
         """Получение статистики подключений."""
-        from_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        to_date = datetime.utcnow().isoformat()
+        from_date = (utcnow() - timedelta(days=7)).isoformat()
+        to_date = utcnow().isoformat()
 
         response = client.get(
             f"/api/v1/stats/connections?from={from_date}&to={to_date}&group_by=day",
@@ -114,8 +115,8 @@ class TestStatsAPI:
 
     def test_connections_stats_invalid_group_by(self, client: TestClient, auth_headers: dict):
         """Ошибка при неверном group_by."""
-        from_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        to_date = datetime.utcnow().isoformat()
+        from_date = (utcnow() - timedelta(days=7)).isoformat()
+        to_date = utcnow().isoformat()
 
         response = client.get(
             f"/api/v1/stats/connections?from={from_date}&to={to_date}&group_by=invalid",

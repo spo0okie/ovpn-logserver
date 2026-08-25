@@ -10,6 +10,7 @@
 """
 
 from datetime import datetime, timedelta
+from core.time import utcnow
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -114,7 +115,7 @@ class TestI32_CacheHit:
     def test_cache_hit_no_external_request(self, db_session: Session, mocker):
         """Cache hit не делает внешний запрос."""
         # Создаем кэш
-        future = datetime.utcnow() + timedelta(days=30)
+        future = utcnow() + timedelta(days=30)
         cache_entry = GeoIPCache(
             ip='1.2.3.4',
             country='Russia',
@@ -124,7 +125,7 @@ class TestI32_CacheHit:
             latitude=55.7558,
             longitude=37.6173,
             isp='Test ISP',
-            cached_at=datetime.utcnow(),
+            cached_at=utcnow(),
             expires_at=future
         )
         db_session.add(cache_entry)
@@ -146,7 +147,7 @@ class TestI32_CacheHit:
     
     def test_cache_hit_returns_correct_data(self, db_session: Session, mocker):
         """Cache hit возвращает корректные данные из БД."""
-        future = datetime.utcnow() + timedelta(days=30)
+        future = utcnow() + timedelta(days=30)
         cache_entry = GeoIPCache(
             ip='8.8.8.8',
             country='United States',
@@ -156,7 +157,7 @@ class TestI32_CacheHit:
             latitude=37.3860,
             longitude=-122.0838,
             isp='Google LLC',
-            cached_at=datetime.utcnow(),
+            cached_at=utcnow(),
             expires_at=future
         )
         db_session.add(cache_entry)
@@ -219,7 +220,7 @@ class TestI33_CacheMiss:
     def test_cache_miss_updates_existing(self, db_session: Session, mocker):
         """При cache miss обновляется существующая запись если она есть."""
         # Создаем устаревшую запись
-        past = datetime.utcnow() - timedelta(days=1)
+        past = utcnow() - timedelta(days=1)
         old_cache = GeoIPCache(
             ip='5.5.5.5',
             country='Old Country',
@@ -415,7 +416,7 @@ class TestCacheOperations:
     
     def test_get_cached_geoip_found(self, db_session: Session):
         """Получение существующей записи из кэша."""
-        future = datetime.utcnow() + timedelta(days=7)
+        future = utcnow() + timedelta(days=7)
         cache = GeoIPCache(
             ip='2.2.2.2',
             country='Italy',
@@ -437,7 +438,7 @@ class TestCacheOperations:
     
     def test_get_cached_geoip_expired(self, db_session: Session):
         """Истекшая запись удаляется из кэша."""
-        past = datetime.utcnow() - timedelta(days=1)
+        past = utcnow() - timedelta(days=1)
         cache = GeoIPCache(
             ip='4.4.4.4',
             country='Expired Country',
@@ -489,7 +490,7 @@ class TestCacheOperations:
             country='Old',
             country_code='OL',
             city='Old City',
-            expires_at=datetime.utcnow() + timedelta(days=7)
+            expires_at=utcnow() + timedelta(days=7)
         )
         db_session.add(cache)
         db_session.commit()

@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Инвариант I5.5: хук не должен падать на импорт-этапе (см. client_connect.py).
 try:
+    from core.time import utcnow
     from core.database import SessionLocal, engine
     from core.models import Account, Session, Base
     _IMPORT_ERROR = None
@@ -175,7 +176,7 @@ def close_active_session(db, cn: str, bytes_sent: int, bytes_received: int):
         )
 
         # I5.2: Устанавливаем время отключения
-        active_session.disconnected_at = datetime.utcnow()
+        active_session.disconnected_at = utcnow()
         # I5.3: Меняем статус на 'closed'
         active_session.status = 'closed'
         # I5.4: Сохраняем статистику трафика

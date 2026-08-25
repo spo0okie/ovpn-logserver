@@ -13,6 +13,7 @@ import os
 import sys
 import pytest
 from datetime import datetime, timedelta
+from core.time import utcnow
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -40,14 +41,14 @@ class TestGetActiveSessionsForAccount:
         # Create active and closed sessions
         active_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active'
         )
         closed_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=2),
-            disconnected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=2),
+            disconnected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='closed'
         )
@@ -99,7 +100,7 @@ class TestCloseOrphanedSession:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -125,11 +126,11 @@ class TestCloseOrphanedSession:
         db.add(account)
         db.commit()
 
-        before_close = datetime.utcnow()
+        before_close = utcnow()
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -159,7 +160,7 @@ class TestCloseOrphanedSession:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -195,13 +196,13 @@ class TestCloseOrphanedSessions:
         # Create multiple active sessions
         session1 = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=2),
+            connected_at=utcnow() - timedelta(hours=2),
             source_ip="10.0.0.1",
             status='active'
         )
         session2 = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -261,7 +262,7 @@ class TestClientConnectOrphanedHandling:
         # Create existing active session
         old_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -351,7 +352,7 @@ class TestClientConnectOrphanedHandling:
         for i in range(3):
             session = Session(
                 account_id=account.id,
-                connected_at=datetime.utcnow() - timedelta(hours=i+1),
+                connected_at=utcnow() - timedelta(hours=i+1),
                 source_ip=f"10.0.0.{i+10}",
                 status='active'
             )
@@ -466,7 +467,7 @@ class TestAtomicOrphanCloseAndCreate:
 
         old = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active',
         )
@@ -512,7 +513,7 @@ class TestAtomicOrphanCloseAndCreate:
 
         old = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active',
         )

@@ -429,3 +429,55 @@ class TestPaginationClamp:
     def test_negative_page_does_not_break(self, client: TestClient, auth_headers: dict):
         response = client.get("/accounts?page=-5&per_page=0", headers=auth_headers)
         assert response.status_code == 200
+
+
+class TestSessionDetailPage:
+    """Страница деталей сессии: эндпоинт API был, страницы не было."""
+
+    def test_detail_page_renders(self, client: TestClient, sample_sessions, auth_headers: dict):
+        session_id = sample_sessions[0].id
+        response = client.get(f"/sessions/{session_id}", headers=auth_headers)
+        assert response.status_code == 200
+        assert f"#{session_id}" in response.text
+        assert sample_sessions[0].source_ip in response.text
+
+    def test_detail_page_requires_auth(self, client: TestClient, sample_sessions):
+        response = client.get(f"/sessions/{sample_sessions[0].id}", follow_redirects=False)
+        assert response.status_code in (307, 302, 401)
+
+    def test_unknown_session_returns_404(self, client: TestClient, auth_headers: dict):
+        response = client.get("/sessions/999999", headers=auth_headers)
+        assert response.status_code == 404
+
+
+class TestSessionsCsvExport:
+    """Выгрузка журнала сессий в CSV."""
+
+    def test_export_returns_csv(self, client: TestClient, sample_sessions, auth_headers: dict):
+        response = client.get("/sessions/export/csv", headers=auth_headers)
+        assert response.status_code == 200
+        assert "text/csv" in response.headers["content-type"]
+        assert "attachment" in response.headers["content-disposition"]
+
+    def test_export_has_header_and_rows(self, client: TestClient, sample_sessions, auth_headers: dict):
+        body = client.get("/sessions/export/csv", headers=auth_headers).text
+        lines = [l for l in body.splitlines() if l.strip()]
+        assert lines[0].lstrip("\ufeff").startswith("id;account;connected_at")
+        assert len(lines) == len(sample_sessions) + 1, "строк должно быть по числу сессий плюс заголовок"
+
+    def test_export_respects_filter(self, client: TestClient, sample_sessions, auth_headers: dict):
+        body = client.get("/sessions/export/csv?status=active", headers=auth_headers).text
+        rows = [l for l in body.splitlines() if l.strip()][1:]
+        assert rows, "активная сессия должна попасть в выгрузку"
+        assert all(";active;" in r for r in rows)
+
+    def test_export_uses_local_time(self, client: TestClient, sample_sessions, auth_headers: dict):
+        """В выгрузке то же время, что человек видел на странице (зона сервера)."""
+        from web.utils.timezone import format_datetime
+        body = client.get("/sessions/export/csv", headers=auth_headers).text
+        expected = format_datetime(sample_sessions[0].connected_at)
+        assert expected in body
+
+    def test_export_requires_auth(self, client: TestClient):
+        response = client.get("/sessions/export/csv", follow_redirects=False)
+        assert response.status_code in (307, 302, 401)

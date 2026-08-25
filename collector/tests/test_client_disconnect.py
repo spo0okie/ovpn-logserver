@@ -14,6 +14,7 @@ import ast
 import os
 import sys
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 import pytest
 
@@ -90,8 +91,8 @@ class TestI51_UpdatesOnlyActiveSession:
         db.add(account)
         db.flush()
 
-        past = datetime.utcnow() - timedelta(hours=1)
-        now = datetime.utcnow()
+        past = utcnow() - timedelta(hours=1)
+        now = utcnow()
 
         # Старая закрытая сессия
         old_session = Session(
@@ -147,8 +148,8 @@ class TestI51_UpdatesOnlyActiveSession:
         db.add(account)
         db.flush()
 
-        past = datetime.utcnow() - timedelta(hours=1)
-        now = datetime.utcnow()
+        past = utcnow() - timedelta(hours=1)
+        now = utcnow()
 
         # Первая (старая) активная сессия
         old_active = Session(
@@ -211,7 +212,7 @@ class TestI52_I53_I54_CorrectClosing:
         # Создаем активную сессию
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active'
         )
@@ -258,7 +259,7 @@ class TestI52_I53_I54_CorrectClosing:
         # Создаем активную сессию
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active'
         )
@@ -266,14 +267,14 @@ class TestI52_I53_I54_CorrectClosing:
         db.commit()
 
         # Запоминаем время до вызова
-        before_call = datetime.utcnow()
+        before_call = utcnow()
 
         # Запускаем client_disconnect
         env['common_name'] = 'user'
         exit_code = run_client_disconnect(env, db_session=db)
 
         # Запоминаем время после вызова
-        after_call = datetime.utcnow()
+        after_call = utcnow()
 
         # Проверяем код возврата
         assert exit_code == 0
@@ -302,7 +303,7 @@ class TestI52_I53_I54_CorrectClosing:
         # Создаем активную сессию с нулевой статистикой
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active',
             bytes_sent=0,
@@ -322,7 +323,7 @@ class TestI52_I53_I54_CorrectClosing:
             # Создаем новую сессию для каждого теста
             new_session = Session(
                 account_id=account.id,
-                connected_at=datetime.utcnow() + timedelta(seconds=i+1),
+                connected_at=utcnow() + timedelta(seconds=i+1),
                 source_ip='192.168.1.1',
                 status='active',
                 bytes_sent=0,
@@ -419,7 +420,7 @@ class TestI55_ExitZeroOnError:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active'
         )
@@ -662,7 +663,7 @@ class TestCloseActiveSession:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active'
         )
@@ -706,7 +707,7 @@ class TestCloseActiveSession:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip='192.168.1.1',
             status='active'
         )

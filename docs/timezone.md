@@ -20,16 +20,29 @@
 
 В Jinja2 подключено как фильтр `local_datetime` (`web/routes/pages.py`).
 
-## Не смешивать naive и aware
+## Единый источник времени
 
-`datetime.utcnow()` (naive) и `datetime.now(timezone.utc)` (aware) при сравнении
-дают `TypeError`. Сейчас в коде смешанный стиль: `web/auth.py` использует aware,
-почти всё остальное — naive. При правках придерживаться стиля окружающего кода.
+Всё, что пишется в БД и сравнивается с ней, берёт время через
+[`core/time.py`](../core/time.py):
 
-Отдельный источник расхождения: часть колонок имеет client-side default
-`datetime.utcnow` в моделях и одновременно `server_default CURRENT_TIMESTAMP` в
-миграциях. Запись мимо ORM получит время сервера БД (в его локальной зоне), запись
-через ORM — UTC. Пока не унифицировано.
+```python
+from core.time import utcnow, utcfromtimestamp
+```
+
+`utcnow()` возвращает **naive UTC** — ровно то же, что давал `datetime.utcnow()`,
+но без устаревшего вызова (`utcnow` объявлен deprecated с Python 3.12).
+
+Прямая замена на `datetime.now(timezone.utc)` была бы ошибкой: она даёт
+**aware**-время, а его сравнение с naive-значениями из БД кидает `TypeError`.
+Именно так в проекте когда-то и появилось смешение стилей.
+
+**Исключение — `web/auth.py`.** Файловые сессии не касаются БД, полностью
+самодостаточны и работают с aware-временем. Смешения не возникает, переводить их
+не нужно.
+
+Колонки с `server_default CURRENT_TIMESTAMP` в миграциях сохранены как страховка
+для записи мимо ORM, но фактически не срабатывают: и ORM, и единственный сырой
+путь (`INSERT ... ON DUPLICATE KEY UPDATE` в `client_connect`) задают время явно.
 
 ## Незакрытая часть
 

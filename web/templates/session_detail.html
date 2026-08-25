@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Session #{{ session.id }} - OpenVPN LogServer{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/sessions">Sessions</a></li>
+        <li class="breadcrumb-item active">#{{ session.id }}</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>
+        <i class="bi bi-diagram-3"></i> Session #{{ session.id }}
+        {% if session.status == 'active' %}
+            <span class="badge badge-active">Active</span>
+        {% elif session.status == 'error' %}
+            <span class="badge badge-revoked">Interrupted</span>
+        {% else %}
+            <span class="badge badge-closed">Closed</span>
+        {% endif %}
+    </h1>
+    <a href="/sessions" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> Back to Sessions
+    </a>
+</div>
+
+{% if session.status == 'error' %}
+<div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle"></i>
+    Сессия не была закрыта штатно: отключение не зафиксировано хуком
+    (например, сервер перезапустился). Время отключения — момент обнаружения.
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <i class="bi bi-info-circle"></i> Session
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <td class="text-muted">Account:</td>
+                        <td>
+                            <a href="/accounts/{{ session.account_cn }}">
+                                <strong>{{ session.account_cn }}</strong>
+                            </a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Connected:</td>
+                        <td>{% if session.connected_at %}{{ session.connected_at | local_datetime }}{% else %}-{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Disconnected:</td>
+                        <td>
+                            {% if session.disconnected_at %}
+                                {{ session.disconnected_at | local_datetime }}
+                            {% else %}
+                                <span class="text-success">ещё подключён</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Duration:</td>
+                        <td>
+                            {% if session.duration_seconds is not none %}
+                                {{ (session.duration_seconds // 3600) }}ч
+                                {{ ((session.duration_seconds % 3600) // 60) }}м
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">OpenVPN ID:</td>
+                        <td>{% if session.session_id %}<code>{{ session.session_id }}</code>{% else %}<span class="text-muted">-</span>{% endif %}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <i class="bi bi-geo-alt"></i> Network
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <td class="text-muted">Source IP:</td>
+                        <td><code>{{ session.source_ip }}</code></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">VPN IP:</td>
+                        <td>{% if session.virtual_ip %}<code>{{ session.virtual_ip }}</code>{% else %}<span class="text-muted">-</span>{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Location:</td>
+                        <td>
+                            {% if session.geo and (session.geo.country or session.geo.city) %}
+                                {{ session.geo.country or '' }}{% if session.geo.country and session.geo.city %}, {% endif %}{{ session.geo.city or '' }}
+                            {% else %}
+                                <span class="text-muted">неизвестно</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Traffic:</td>
+                        <td>
+                            <span class="text-success">
+                                <i class="bi bi-arrow-up"></i>
+                                {{ '%.2f'|format(session.bytes_sent / 1024 / 1024) }} MB
+                            </span><br>
+                            <span class="text-info">
+                                <i class="bi bi-arrow-down"></i>
+                                {{ '%.2f'|format(session.bytes_received / 1024 / 1024) }} MB
+                            </span>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

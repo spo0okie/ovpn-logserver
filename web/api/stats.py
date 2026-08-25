@@ -8,6 +8,7 @@ I7.6: Аутентификация обязательна (через Depends в
 """
 
 from datetime import datetime, timedelta
+from core.time import utcnow
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -65,10 +66,10 @@ def get_overview_stats(
     ).scalar() or 0
 
     # Сертификаты, истекающие в ближайшие 30 дней
-    soon = datetime.utcnow() + timedelta(days=30)
+    soon = utcnow() + timedelta(days=30)
     expiring_soon = db.query(func.count(Account.id)).filter(
         Account.valid_to <= soon,
-        Account.valid_to >= datetime.utcnow()
+        Account.valid_to >= utcnow()
     ).scalar() or 0
 
     # Статистика по сессиям
@@ -77,19 +78,19 @@ def get_overview_stats(
     ).scalar() or 0
 
     # Сессии за сегодня
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_sessions = db.query(func.count(SessionModel.id)).filter(
         SessionModel.connected_at >= today_start
     ).scalar() or 0
 
     # Сессии за неделю
-    week_start = datetime.utcnow() - timedelta(days=7)
+    week_start = utcnow() - timedelta(days=7)
     week_sessions = db.query(func.count(SessionModel.id)).filter(
         SessionModel.connected_at >= week_start
     ).scalar() or 0
 
     # Сессии за месяц
-    month_start = datetime.utcnow() - timedelta(days=30)
+    month_start = utcnow() - timedelta(days=30)
     month_sessions = db.query(func.count(SessionModel.id)).filter(
         SessionModel.connected_at >= month_start
     ).scalar() or 0

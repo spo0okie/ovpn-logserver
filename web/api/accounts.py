@@ -14,6 +14,7 @@ I7.6: Аутентификация обязательна (через Depends в
 """
 
 from datetime import datetime
+from core.time import utcnow
 from typing import Optional, List
 from enum import Enum
 
@@ -49,7 +50,7 @@ def _can_user_connect(db: Session, cn: str) -> bool:
         Account.is_revoked == False,
         or_(
             Account.valid_to == None,
-            Account.valid_to >= datetime.utcnow()
+            Account.valid_to >= utcnow()
         )
     ).first()
     return active_account is not None
@@ -96,7 +97,7 @@ def list_accounts(
             Account.is_revoked == False,
             or_(
                 Account.valid_to == None,
-                Account.valid_to >= datetime.utcnow()
+                Account.valid_to >= utcnow()
             )
         ), 1), else_=0)).label('active_certs'),
         func.max(Account.has_ccd).label('has_ccd'),
@@ -126,7 +127,7 @@ def list_accounts(
             Account.is_revoked == False,
             or_(
                 Account.valid_to == None,
-                Account.valid_to >= datetime.utcnow()
+                Account.valid_to >= utcnow()
             )
         ), 1), else_=0)),
         # Список агрегирован по CN, поэтому сортируем по «есть ли CCD хотя бы
@@ -230,7 +231,7 @@ def get_account(
 
     # Считаем статистику
     active_certs = sum(1 for a in accounts if not a.is_revoked and (
-        not a.valid_to or a.valid_to >= datetime.utcnow()
+        not a.valid_to or a.valid_to >= utcnow()
     ))
     has_ccd = any(a.has_ccd for a in accounts)
 

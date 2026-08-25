@@ -18,6 +18,8 @@ from pathlib import Path
 # Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.time import utcfromtimestamp
+
 from core.database import SessionLocal
 from core.models import Account
 from collector.config import CCD_DIR
@@ -94,7 +96,7 @@ def find_ccd_files(ccd_dir: str) -> dict:
             if cn.startswith(".") or cn.endswith("~"):
                 continue
             # mtime в naive-UTC — единый стиль времени в проекте (не локальное!)
-            mtime = datetime.utcfromtimestamp(file_path.stat().st_mtime)
+            mtime = utcfromtimestamp(file_path.stat().st_mtime)
             ccd_files[cn] = mtime
             file_count += 1
 

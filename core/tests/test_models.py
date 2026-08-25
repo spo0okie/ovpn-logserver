@@ -11,6 +11,7 @@
 
 import pytest
 from datetime import datetime, timedelta
+from core.time import utcnow
 from sqlalchemy import inspect, Integer, BigInteger, String, DateTime, Boolean, Text, Enum, Numeric
 from sqlalchemy.dialects.mysql import INTEGER, BIGINT
 from sqlalchemy.exc import IntegrityError
@@ -304,7 +305,7 @@ class TestI25DatabaseConstraints:
             cn="active_user",
             serial_number="ACTIVE001",
             is_revoked=False,
-            valid_to=datetime.utcnow() + timedelta(days=30)
+            valid_to=utcnow() + timedelta(days=30)
         )
         db_session.add(active_account)
 
@@ -313,7 +314,7 @@ class TestI25DatabaseConstraints:
             cn="revoked_user",
             serial_number="REVOKED001",
             is_revoked=True,
-            valid_to=datetime.utcnow() + timedelta(days=30)
+            valid_to=utcnow() + timedelta(days=30)
         )
         db_session.add(revoked_account)
 
@@ -322,7 +323,7 @@ class TestI25DatabaseConstraints:
             cn="expired_user",
             serial_number="EXPIRED001",
             is_revoked=False,
-            valid_to=datetime.utcnow() - timedelta(days=1)
+            valid_to=utcnow() - timedelta(days=1)
         )
         db_session.add(expired_account)
 
@@ -362,7 +363,7 @@ class TestI25DatabaseConstraints:
         """Session.source_ip не может быть NULL."""
         session = SessionModel(
             account_id=sample_account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip=None  # Нарушаем NOT NULL
         )
         db_session.add(session)
@@ -382,7 +383,7 @@ class TestI25DatabaseConstraints:
         # Пытаемся создать сессию с несуществующим account_id
         session = SessionModel(
             account_id=99999,  # Несуществующий ID
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="192.168.1.1"
         )
         db_session.add(session)
@@ -435,7 +436,7 @@ class TestModelBehavior:
         """GeoIPCache.is_expired должен возвращать True для истекшего кэша."""
         cache = GeoIPCache(
             ip="9.9.9.9",
-            expires_at=datetime.utcnow() - timedelta(days=1)  # Истек вчера
+            expires_at=utcnow() - timedelta(days=1)  # Истек вчера
         )
         db_session.add(cache)
         db_session.commit()
@@ -457,7 +458,7 @@ class TestModelBehavior:
         """Session.status по умолчанию должен быть 'active'."""
         session = SessionModel(
             account_id=sample_account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="192.168.1.1"
             # status не указан
         )

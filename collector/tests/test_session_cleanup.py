@@ -15,6 +15,7 @@ import os
 import sys
 import pytest
 from datetime import datetime, timedelta
+from core.time import utcnow
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -44,21 +45,21 @@ class TestGetActiveSessions:
         # Создаем сессии с разными статусами
         active_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
         closed_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
-            disconnected_at=datetime.utcnow(),
+            connected_at=utcnow() - timedelta(hours=1),
+            disconnected_at=utcnow(),
             source_ip="10.0.0.1",
             status='closed'
         )
         error_session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=2),
-            disconnected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=2),
+            disconnected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='error'
         )
@@ -110,7 +111,7 @@ class TestGetOrphanedSessions:
         # Создаем активную сессию
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -144,7 +145,7 @@ class TestGetOrphanedSessions:
         # Создаем активную сессию
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -177,13 +178,13 @@ class TestGetOrphanedSessions:
         # Создаем активные сессии
         session1 = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
         session2 = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=1),
+            connected_at=utcnow() - timedelta(hours=1),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -221,7 +222,7 @@ class TestMarkSessionAsOrphaned:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -249,11 +250,11 @@ class TestMarkSessionAsOrphaned:
         db.add(account)
         db.commit()
 
-        before_mark = datetime.utcnow()
+        before_mark = utcnow()
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -285,7 +286,7 @@ class TestMarkSessionAsOrphaned:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -323,7 +324,7 @@ class TestCleanupOrphanedSessionsIdempotency:
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow(),
+            connected_at=utcnow(),
             source_ip="10.0.0.1",
             status='active'
         )
@@ -370,11 +371,11 @@ class TestCleanupOrphanedSessionsIdempotency:
         db.add(account)
         db.commit()
 
-        disconnected_time = datetime.utcnow() - timedelta(hours=1)
+        disconnected_time = utcnow() - timedelta(hours=1)
 
         session = Session(
             account_id=account.id,
-            connected_at=datetime.utcnow() - timedelta(hours=2),
+            connected_at=utcnow() - timedelta(hours=2),
             disconnected_at=disconnected_time,
             source_ip="10.0.0.1",
             status='error'
@@ -416,9 +417,9 @@ class TestIntegrationCleanup:
 
         # Создаем сессии
         sessions = [
-            Session(account_id=accounts[0].id, connected_at=datetime.utcnow(), source_ip="10.0.0.1", status='active'),
-            Session(account_id=accounts[1].id, connected_at=datetime.utcnow(), source_ip="10.0.0.1", status='active'),
-            Session(account_id=accounts[2].id, connected_at=datetime.utcnow(), source_ip="10.0.0.1", status='active'),
+            Session(account_id=accounts[0].id, connected_at=utcnow(), source_ip="10.0.0.1", status='active'),
+            Session(account_id=accounts[1].id, connected_at=utcnow(), source_ip="10.0.0.1", status='active'),
+            Session(account_id=accounts[2].id, connected_at=utcnow(), source_ip="10.0.0.1", status='active'),
         ]
         db.add_all(sessions)
         db.commit()

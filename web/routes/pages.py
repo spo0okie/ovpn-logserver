@@ -6,13 +6,15 @@ UI вызывает функции API напрямую (без self-HTTP).
 При отсутствии аутентификации — редирект на /login.
 """
 
+import csv
+import io
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -37,6 +39,10 @@ _DEFAULT_LIFETIME = 3600     # 1 час
 # Верхняя граница размера страницы — совпадает с Query(le=100) в API; здесь
 # нужна отдельно, т.к. UI-роуты зовут функции API напрямую, минуя валидацию FastAPI.
 _MAX_PER_PAGE = 100
+# Верхняя граница выгрузки CSV: формируется в памяти одним куском
+CSV_EXPORT_LIMIT = 10000
+# BOM: без него Excel открывает UTF-8 CSV как ANSI и портит кириллицу
+BOM_UTF8 = "﻿"
 
 
 def _clamp_pagination(page: int, per_page: int) -> tuple:
@@ -277,4 +283,85 @@ def sessions_list(
             "status": status,
             "country": country,
         },
+    )
+
+
+@router.get("/sessions/{session_id}", response_class=HTMLResponse)
+def session_detail(
+    request: Request,
+    session_id: int,
+    _user: str = Depends(web_user),
+    db: Session = Depends(get_db),
+):
+    """Детали одной сессии. Эндпоинт API существовал, страницы для него не было."""
+    session = sessions_api.get_session(session_id=session_id, db=db)
+    return templates.TemplateResponse(
+        "session_detail.html",
+        {"request": request, "session": session, "now": _now_local()},
+    )
+
+
+@router.get("/sessions/export/csv")
+def sessions_export_csv(
+    account: Optional[str] = None,
+    source_ip: Optional[str] = None,
+    status: Optional[str] = None,
+    country: Optional[str] = None,
+    _user: str = Depends(web_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Выгрузка журнала сессий в CSV с теми же фильтрами, что и на странице.
+
+    Ограничение по объёму намеренное: выгрузка идёт одним запросом в память,
+    и без верхней границы большой журнал положил бы процесс.
+    """
+    result = sessions_api.list_sessions(
+        page=1,
+        per_page=CSV_EXPORT_LIMIT,
+        account=account,
+        from_date=None,
+        to_date=None,
+        status=status,
+        source_ip=source_ip,
+        country=country,
+        draw=None,
+        search=None,
+        order_col=None,
+        order_dir=None,
+        db=db,
+    )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";", lineterminator=chr(10))
+    writer.writerow([
+        "id", "account", "connected_at", "disconnected_at", "duration_seconds",
+        "source_ip", "virtual_ip", "country", "city", "status",
+        "bytes_sent", "bytes_received",
+    ])
+    for item in result["data"]:
+        geo = item.get("geo") or {}
+        writer.writerow([
+            item["id"],
+            item["account_cn"],
+            # Время в зоне сервера — как на страницах, чтобы выгрузка совпадала
+            # с тем, что человек видел в интерфейсе
+            item.get("connected_at_local") or "",
+            item.get("disconnected_at_local") or "",
+            item.get("duration_seconds") if item.get("duration_seconds") is not None else "",
+            item["source_ip"],
+            item.get("virtual_ip") or "",
+            geo.get("country") or "",
+            geo.get("city") or "",
+            item["status"],
+            item["bytes_sent"],
+            item["bytes_received"],
+        ])
+
+    filename = f"sessions-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.csv"
+    return StreamingResponse(
+        # BOM — чтобы Excel открыл кириллицу в UTF-8 без «кракозябр»
+        iter([BOM_UTF8 + buffer.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -18,6 +18,8 @@ from pathlib import Path
 # Добавляем родительскую директорию в путь для импорта core
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.time import utcnow
+
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
@@ -98,7 +100,7 @@ def parse_crl(crl_path: str) -> dict:
             serial = normalize_serial(revoked_cert.serial_number)
             revoked_at = revoked_cert.revocation_date_utc
             if revoked_at is None:
-                revoked_at = datetime.utcnow()
+                revoked_at = utcnow()
             else:
                 revoked_at = revoked_at.replace(tzinfo=None)
             revoked_certs[serial] = revoked_at
@@ -201,7 +203,7 @@ def check_crl(db=None, crl_path: str = None, certs_dir: str = None) -> dict:
             if is_revoked and not account.is_revoked:
                 # I6.2: Отмечаем как отозванный
                 account.is_revoked = True
-                account.revoked_at = revoked_serials.get(serial, datetime.utcnow())
+                account.revoked_at = revoked_serials.get(serial, utcnow())
                 stats['revoked'] += 1
                 logger.info(f"Marked as revoked: CN='{account.cn}', serial='{serial}'")
             elif not is_revoked and account.is_revoked:

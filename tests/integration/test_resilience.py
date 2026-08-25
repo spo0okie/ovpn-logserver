@@ -6,6 +6,7 @@
 
 import pytest
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 
 class TestResilience:
@@ -96,8 +97,8 @@ class TestResilience:
         # Arrange
         account = sample_data_factory.create_account(
             cn="resilient_account",
-            valid_from=datetime.utcnow() - timedelta(days=100),
-            valid_to=datetime.utcnow() + timedelta(days=200),
+            valid_from=utcnow() - timedelta(days=100),
+            valid_to=utcnow() + timedelta(days=200),
             is_revoked=True,
             has_ccd=True
         )
@@ -199,8 +200,8 @@ class TestResilience:
             latitude=37.386051,
             longitude=-122.083847,
             isp="Google LLC",
-            cached_at=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(days=30)
+            cached_at=utcnow(),
+            expires_at=utcnow() + timedelta(days=30)
         )
         db.add(cache_entry)
         db.commit()

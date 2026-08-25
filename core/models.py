@@ -5,6 +5,7 @@ SQLAlchemy модели для OpenVPN LogServer.
 """
 
 from datetime import datetime
+from core.time import utcnow
 from typing import List, Optional
 
 from sqlalchemy import (
@@ -108,13 +109,13 @@ class Account(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
-        default=datetime.utcnow,
+        default=utcnow,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False
     )
 
@@ -146,7 +147,7 @@ class Account(Base):
         """
         if self.is_revoked:
             return False
-        if self.valid_to and self.valid_to < datetime.utcnow():
+        if self.valid_to and self.valid_to < utcnow():
             return False
         return True
 
@@ -171,7 +172,7 @@ class Account(Base):
             Account.is_revoked == False,
             or_(
                 Account.valid_to == None,
-                Account.valid_to >= datetime.utcnow()
+                Account.valid_to >= utcnow()
             )
         ).first()
         return active_account is not None
@@ -194,7 +195,7 @@ class Account(Base):
             Account.is_revoked == False,
             or_(
                 Account.valid_to == None,
-                Account.valid_to >= datetime.utcnow()
+                Account.valid_to >= utcnow()
             )
         ).count()
 
@@ -219,7 +220,7 @@ class Account(Base):
 
         total = len(accounts)
         revoked = sum(1 for a in accounts if a.is_revoked)
-        expired = sum(1 for a in accounts if not a.is_revoked and a.valid_to and a.valid_to < datetime.utcnow())
+        expired = sum(1 for a in accounts if not a.is_revoked and a.valid_to and a.valid_to < utcnow())
         active = total - revoked - expired
 
         return {
@@ -308,13 +309,13 @@ class Session(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
-        default=datetime.utcnow,
+        default=utcnow,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False
     )
 
@@ -383,7 +384,7 @@ class GeoIPCache(Base):
     )
     cached_at: Mapped[datetime] = mapped_column(
         DateTime,  # DATETIME DEFAULT CURRENT_TIMESTAMP
-        default=datetime.utcnow,
+        default=utcnow,
         nullable=False
     )
     expires_at: Mapped[Optional[datetime]] = mapped_column(
@@ -403,4 +404,4 @@ class GeoIPCache(Base):
         """
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return utcnow() > self.expires_at

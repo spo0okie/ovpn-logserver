@@ -6,6 +6,7 @@
 
 import pytest
 from datetime import datetime, timedelta
+from core.time import utcnow
 from tests.integration.conftest import create_test_cert
 
 
@@ -49,7 +50,7 @@ class TestSyncTasks:
         assert account.valid_to is not None, "valid_to должен быть установлен"
         
         # Проверяем что даты соответствуют сертификату
-        expected_valid_to = datetime.utcnow() + timedelta(days=180)
+        expected_valid_to = utcnow() + timedelta(days=180)
         # Допуск в 1 день из-за округления
         assert (account.valid_to - expected_valid_to).days <= 1
     
@@ -239,7 +240,7 @@ class TestSyncTasks:
         from core.models import Account
         
         test_cn = "renewal_user"
-        old_valid_to = datetime.utcnow() + timedelta(days=30)
+        old_valid_to = utcnow() + timedelta(days=30)
 
         # Первый сертификат (короткий срок) — запись создаётся синхронизацией
         create_test_cert(tmp_certs_dir, test_cn, valid_days=30)

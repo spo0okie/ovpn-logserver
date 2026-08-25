@@ -11,6 +11,7 @@ import ast
 import os
 import sys
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 import pytest
 from cryptography import x509
@@ -118,15 +119,15 @@ def create_test_crl(tmp_path, revoked_serials: list = None) -> str:
             revoked_cert = x509.RevokedCertificateBuilder().serial_number(
                 serial
             ).revocation_date(
-                datetime.utcnow()
+                utcnow()
             ).build(default_backend())
             revoked_certs.append(revoked_cert)
 
     # Создаем CRL
     crl_builder = x509.CertificateRevocationListBuilder()
     crl_builder = crl_builder.issuer_name(issuer)
-    crl_builder = crl_builder.last_update(datetime.utcnow())
-    crl_builder = crl_builder.next_update(datetime.utcnow() + timedelta(days=30))
+    crl_builder = crl_builder.last_update(utcnow())
+    crl_builder = crl_builder.next_update(utcnow() + timedelta(days=30))
 
     for revoked_cert in revoked_certs:
         crl_builder = crl_builder.add_revoked_certificate(revoked_cert)
@@ -149,7 +150,7 @@ def sample_cert_data():
     """
     Фикстура с тестовыми данными для сертификата.
     """
-    now = datetime.utcnow()
+    now = utcnow()
     return {
         'cn': 'testclient',
         'valid_from': now,
@@ -174,7 +175,7 @@ class TestI61CertSyncUpdatesDates:
         из сертификатов в БД. Теперь account идентифицируется по паре (cn, serial_number).
         """
         # Создаем тестовый сертификат
-        now = datetime.utcnow()
+        now = utcnow()
         valid_from = now
         valid_to = now + timedelta(days=365)
 
@@ -216,7 +217,7 @@ class TestI61CertSyncUpdatesDates:
         Тест I6.1: Синхронизация нескольких сертификатов.
         Теперь account идентифицируется по паре (cn, serial_number).
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем несколько сертификатов
         cert1_path = create_test_certificate('client1', now, now + timedelta(days=365), tmp_path)
@@ -269,7 +270,7 @@ class TestI64Idempotency:
         Проверяем что повторный запуск не ломает данные.
         Теперь account идентифицируется по паре (cn, serial_number).
         """
-        now = datetime.utcnow()
+        now = utcnow()
         valid_from = now
         valid_to = now + timedelta(days=365)
 
@@ -344,7 +345,7 @@ class TestI65CreateAccounts:
         Проверяем что sync_certificates создает новые accounts для
         неотозванных сертификатов.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификат для несуществующего account
         cert_path = create_test_certificate('new_client', now, now + timedelta(days=365), tmp_path)
@@ -382,7 +383,7 @@ class TestI65CreateAccounts:
         Проверяем что sync_certificates не создает accounts для
         отозванных сертификатов.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификаты с конкретными серийными номерами
         serial1 = 12345
@@ -424,7 +425,7 @@ class TestI65CreateAccounts:
         Проверяем корректную обработку когда часть CN уже есть в БД,
         а часть — новые. Теперь account идентифицируется по паре (cn, serial_number).
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем сертификаты
         cert1_path = create_test_certificate('existing_client', now, now + timedelta(days=365), tmp_path)
@@ -470,7 +471,7 @@ class TestHelperFunctions:
         """
         Тест extract_cert_info.
         """
-        now = datetime.utcnow()
+        now = utcnow()
         cert_path = create_test_certificate('test_cn', now, now + timedelta(days=365), tmp_path)
 
         info = extract_cert_info(cert_path)
@@ -496,7 +497,7 @@ class TestHelperFunctions:
         """
         Тест find_cert_files.
         """
-        now = datetime.utcnow()
+        now = utcnow()
 
         # Создаем несколько сертификатов
         create_test_certificate('client1', now, now + timedelta(days=365), tmp_path)
@@ -572,7 +573,7 @@ class TestM2BatchIsolation:
 
     def test_upsert_creates_then_updates_idempotent(self, db):
         from collector.cert_sync import _upsert_account
-        now = datetime.utcnow()
+        now = utcnow()
         info = {'cn': 'u1', 'serial_number': '123', 'valid_from': now,
                 'valid_to': now + timedelta(days=365)}
         stats = {'created': 0, 'updated': 0, 'errors': 0}
@@ -591,7 +592,7 @@ class TestM2BatchIsolation:
     def test_recover_after_race_updates_existing(self, db):
         """Симуляция гонки: запись уже вставлена параллельно — _recover обновляет."""
         from collector.cert_sync import _recover_after_race
-        now = datetime.utcnow()
+        now = utcnow()
         # эмулируем, что client_connect уже вставил account
         db.add(Account(cn='r1', serial_number='999', valid_from=now,
                        valid_to=now + timedelta(days=1)))
@@ -614,7 +615,7 @@ class TestM2BatchIsolation:
         откатила весь батч (M2).
         """
         from collector import cert_sync
-        now = datetime.utcnow()
+        now = utcnow()
         create_test_certificate('cA', now, now + timedelta(days=365), tmp_path)
         create_test_certificate('cB', now, now + timedelta(days=365), tmp_path)
         create_test_certificate('cC', now, now + timedelta(days=365), tmp_path)

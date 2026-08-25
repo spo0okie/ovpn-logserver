@@ -9,6 +9,7 @@ import sys
 import tempfile
 import base64
 from datetime import datetime, timedelta
+from core.time import utcnow
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -219,7 +220,7 @@ class VPNSimulator:
             'trusted_ip': source_ip,
             'trusted_port': '12345',
             'ifconfig_pool_remote_ip': virtual_ip or f"10.8.0.{self._session_counter}",
-            'time_unix': str(int(datetime.utcnow().timestamp()))
+            'time_unix': str(int(utcnow().timestamp()))
         }
         
         # Сохраняем для отключения
@@ -368,9 +369,9 @@ def create_test_cert(certs_dir, cn: str, valid_days: int = 365):
     ).serial_number(
         x509.random_serial_number()
     ).not_valid_before(
-        datetime.utcnow()
+        utcnow()
     ).not_valid_after(
-        datetime.utcnow() + timedelta(days=valid_days)
+        utcnow() + timedelta(days=valid_days)
     ).add_extension(
         x509.SubjectAlternativeName([x509.DNSName(cn)]),
         critical=False,
@@ -425,12 +426,12 @@ def sample_data_factory(db):
             
             account = Account(
                 cn=cn,
-                valid_from=kwargs.get('valid_from', datetime.utcnow() - timedelta(days=365)),
-                valid_to=kwargs.get('valid_to', datetime.utcnow() + timedelta(days=365)),
+                valid_from=kwargs.get('valid_from', utcnow() - timedelta(days=365)),
+                valid_to=kwargs.get('valid_to', utcnow() + timedelta(days=365)),
                 is_revoked=kwargs.get('is_revoked', False),
                 has_ccd=kwargs.get('has_ccd', False),
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=utcnow(),
+                updated_at=utcnow()
             )
             self.db.add(account)
             self.db.commit()
@@ -446,7 +447,7 @@ def sample_data_factory(db):
             session = SessionModel(
                 account_id=account.id,
                 session_id=kwargs.get('session_id', f"test_session_{self._counter}"),
-                connected_at=kwargs.get('connected_at', datetime.utcnow() - timedelta(hours=1)),
+                connected_at=kwargs.get('connected_at', utcnow() - timedelta(hours=1)),
                 disconnected_at=kwargs.get('disconnected_at'),
                 source_ip=kwargs.get('source_ip', f"192.168.1.{self._counter}"),
                 country=kwargs.get('country', "Russia"),

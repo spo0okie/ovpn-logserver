@@ -35,6 +35,8 @@ management-сокет. Веб-приложение только читает и�
 
 ```bash
 pip install -r web/requirements.txt -r collector/requirements.txt -r database/requirements.txt
+# для запуска тестов дополнительно:
+pip install -r requirements-dev.txt
 
 cp config/database.yaml.example config/database.yaml
 cp config/auth.yaml.example     config/auth.yaml

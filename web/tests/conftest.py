@@ -5,6 +5,7 @@
 import base64
 import os
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,12 +98,12 @@ def sample_account(db: Session):
     """Создает тестовый аккаунт."""
     account = Account(
         cn="test_user",
-        valid_from=datetime.utcnow() - timedelta(days=365),
-        valid_to=datetime.utcnow() + timedelta(days=365),
+        valid_from=utcnow() - timedelta(days=365),
+        valid_to=utcnow() + timedelta(days=365),
         is_revoked=False,
         has_ccd=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=utcnow(),
+        updated_at=utcnow()
     )
     db.add(account)
     db.commit()
@@ -117,12 +118,12 @@ def sample_accounts(db: Session):
     for i in range(5):
         account = Account(
             cn=f"user_{i}",
-            valid_from=datetime.utcnow() - timedelta(days=365),
-            valid_to=datetime.utcnow() + timedelta(days=365),
+            valid_from=utcnow() - timedelta(days=365),
+            valid_to=utcnow() + timedelta(days=365),
             is_revoked=i % 2 == 0,  # Чередуем отозванные
             has_ccd=i % 2 == 1,  # Чередуем с CCD
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=utcnow(),
+            updated_at=utcnow()
         )
         db.add(account)
         accounts.append(account)
@@ -141,7 +142,7 @@ def sample_sessions(db: Session, sample_account: Account):
     active = SessionModel(
         account_id=sample_account.id,
         session_id="sess_active",
-        connected_at=datetime.utcnow() - timedelta(hours=1),
+        connected_at=utcnow() - timedelta(hours=1),
         source_ip="192.168.1.100",
         country="Russia",
         city="Moscow",
@@ -157,8 +158,8 @@ def sample_sessions(db: Session, sample_account: Account):
     closed = SessionModel(
         account_id=sample_account.id,
         session_id="sess_closed",
-        connected_at=datetime.utcnow() - timedelta(days=1),
-        disconnected_at=datetime.utcnow() - timedelta(hours=23),
+        connected_at=utcnow() - timedelta(days=1),
+        disconnected_at=utcnow() - timedelta(hours=23),
         source_ip="192.168.1.101",
         country="Germany",
         city="Berlin",

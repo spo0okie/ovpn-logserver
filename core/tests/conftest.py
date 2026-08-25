@@ -7,6 +7,7 @@
 import os
 import sys
 from datetime import datetime, timedelta
+from core.time import utcnow
 
 # Добавляем корневую директорию проекта в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -107,8 +108,8 @@ def sample_account(db_session: Session) -> Account:
     account = Account(
         cn="test_user",
         serial_number="TEST001",
-        valid_from=datetime.utcnow(),
-        valid_to=datetime.utcnow() + timedelta(days=365),
+        valid_from=utcnow(),
+        valid_to=utcnow() + timedelta(days=365),
         is_revoked=False,
         has_ccd=False
     )
@@ -133,7 +134,7 @@ def sample_session(db_session: Session, sample_account: Account) -> SessionModel
     session = SessionModel(
         account_id=sample_account.id,
         session_id="test_session_123",
-        connected_at=datetime.utcnow(),
+        connected_at=utcnow(),
         source_ip="192.168.1.1",
         country="Russia",
         city="Moscow",
@@ -170,8 +171,8 @@ def sample_geoip_cache(db_session: Session) -> GeoIPCache:
         latitude=37.386051,
         longitude=-122.083847,
         isp="Google LLC",
-        cached_at=datetime.utcnow(),
-        expires_at=datetime.utcnow() + timedelta(days=30)
+        cached_at=utcnow(),
+        expires_at=utcnow() + timedelta(days=30)
     )
     db_session.add(cache)
     db_session.commit()
