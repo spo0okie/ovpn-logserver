@@ -69,7 +69,12 @@
                     <tr>
                         <td class="text-muted">CCD File:</td>
                         <td>
-                            {% if account.has_ccd is defined %}
+                            {% if account.ccd_sites %}
+                                {# Мультисайт: на каких серверах есть CCD #}
+                                {% for site in account.ccd_sites %}
+                                    <span class="badge bg-info"><i class="bi bi-check"></i> {{ site.server_name }}</span>
+                                {% endfor %}
+                            {% elif account.has_ccd is defined %}
                                 {% if account.has_ccd %}
                                     <span class="badge bg-info"><i class="bi bi-check"></i> Present</span>
                                 {% else %}
@@ -262,6 +267,7 @@
                         <thead>
                             <tr>
                                 <th>Connected</th>
+                                <th>Server</th>
                                 <th>Duration</th>
                                 <th>Source IP</th>
                                 <th>Location</th>
@@ -279,6 +285,7 @@
                                         {{ session.connected_at | local_datetime }}
                                     {% endif %}
                                 </td>
+                                <td>{{ session.server_name or '-' }}</td>
                                 <td>
                                     {% if session.duration_seconds %}
                                         {% set hours = session.duration_seconds // 3600 %}

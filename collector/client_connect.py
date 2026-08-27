@@ -37,19 +37,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # при загрузке core.database даёт ненулевой exit → OpenVPN заблокирует клиента).
 # Любой сбой импорта фиксируем и обрабатываем внутри main() с exit 0.
 try:
+    from sqlalchemy import or_
     from sqlalchemy.dialects.mysql import insert
     from core.time import utcfromtimestamp, utcnow
     from core.database import SessionLocal, engine
     from core.models import Account, Session, Base
     from core.geoip import resolve_geoip
     from core.serial import normalize_serial
+    from collector.config import SERVER_NAME
+    from collector.server_registry import resolve_server_id
     _IMPORT_ERROR = None
 except Exception as _import_exc:  # noqa: BLE001 — сознательно ловим всё
     _IMPORT_ERROR = _import_exc
-    insert = None
+    or_ = insert = None
     SessionLocal = engine = None
     Account = Session = Base = None
     resolve_geoip = None
+    SERVER_NAME = None
+    resolve_server_id = None
 
     def normalize_serial(value):  # заглушка на случай сбоя импорта
         return value
@@ -224,25 +229,35 @@ def create_or_get_account(db, cn: str, serial_number: str = "unknown"):
     return account
 
 
-def get_active_sessions_for_account(db, account_id: int) -> list:
+def get_active_sessions_for_account(db, account_id: int, server_id: int = None) -> list:
     """
-    Возвращает все активные сессии для данного аккаунта.
+    Возвращает все активные сессии для данного аккаунта НА ЭТОМ сервере.
 
     Invariant C5.2: Проверяет наличие активной сессии для данного CN
+
+    Мультисайт: скоуп по server_id обязателен — один конфиг может легитимно
+    висеть одновременно на двух сайтах, чужие сессии закрывать нельзя.
+    Сессии с server_id IS NULL (legacy до мультисайта) считаются своими:
+    они созданы единственным существовавшим тогда сервером.
 
     Аргументы:
         db: сессия базы данных
         account_id: ID аккаунта
+        server_id: ID текущего сервера (None — без скоупа, старое поведение)
 
     Возвращает:
         list: Список активных сессий
     """
-    active_sessions = db.query(Session).filter(
+    query = db.query(Session).filter(
         Session.account_id == account_id,
         Session.status == 'active'
-    ).all()
+    )
+    if server_id is not None:
+        query = query.filter(
+            or_(Session.server_id == server_id, Session.server_id.is_(None))
+        )
 
-    return active_sessions
+    return query.all()
 
 
 def close_orphaned_session(db, session: Session):
@@ -271,20 +286,21 @@ def close_orphaned_session(db, session: Session):
     )
 
 
-def close_orphaned_sessions(db, account_id: int) -> int:
+def close_orphaned_sessions(db, account_id: int, server_id: int = None) -> int:
     """
-    Находит и закрывает все orphaned сессии для аккаунта.
+    Находит и закрывает все orphaned сессии для аккаунта на ЭТОМ сервере.
 
     Invariant C5.4: Создается новая сессия только после закрытия старой
 
     Аргументы:
         db: сессия базы данных
         account_id: ID аккаунта
+        server_id: ID текущего сервера (скоуп мультисайта, см. C5.2)
 
     Возвращает:
         int: Количество закрытых orphaned сессий
     """
-    active_sessions = get_active_sessions_for_account(db, account_id)
+    active_sessions = get_active_sessions_for_account(db, account_id, server_id)
 
     if not active_sessions:
         logger.debug(f"No active sessions found for account {account_id}")
@@ -299,7 +315,7 @@ def close_orphaned_sessions(db, account_id: int) -> int:
     return closed_count
 
 
-def create_session(db, account_id: int, env_vars: dict, geo: dict):
+def create_session(db, account_id: int, env_vars: dict, geo: dict, server_id: int = None):
     """
     Создает запись о сессии со статусом 'active'.
 
@@ -308,6 +324,8 @@ def create_session(db, account_id: int, env_vars: dict, geo: dict):
         account_id: ID аккаунта
         env_vars: переменные окружения
         geo: геолокационные данные
+        server_id: ID текущего сервера (None — если регистрация не удалась;
+                   данные важнее скоупа, сессия пишется с NULL)
 
     Invariant I4.3, I4.6: Только INSERT, статус 'active'
     """
@@ -322,6 +340,7 @@ def create_session(db, account_id: int, env_vars: dict, geo: dict):
 
     session = Session(
         account_id=account_id,
+        server_id=server_id,
         connected_at=connected_at,
         source_ip=env_vars['trusted_ip'],
         country=geo.get('country') if geo else None,
@@ -396,6 +415,22 @@ def client_connect(db_session=None):
             env_vars.get('serial_number', 'unknown')
         )
 
+        # Мультисайт: регистрируем/находим ЭТОТ инстанс по имени из конфига.
+        # Сбой регистрации не блокирует запись сессии (I4.5): данные важнее
+        # скоупа, сессия уйдёт с server_id=NULL.
+        server_id = None
+        try:
+            server_id = resolve_server_id(db, SERVER_NAME)
+        except Exception as server_exc:  # noqa: BLE001
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "Не удалось зарегистрировать сервер '%s', сессия будет без server_id: %s",
+                SERVER_NAME, server_exc,
+            )
+
         # I4.4: Геолокация запрашивается ДО работы с сессиями: resolve_geoip
         # пишет кэш и коммитит переданную сессию БД, а это разорвало бы
         # транзакцию закрытия orphaned + создания новой.
@@ -408,11 +443,11 @@ def client_connect(db_session=None):
 
         # C5.1-C5.4 и I4.3 в ОДНОЙ транзакции: либо старые сессии закрыты и
         # новая создана, либо не изменилось ничего.
-        closed_count = close_orphaned_sessions(db, account.id)
+        closed_count = close_orphaned_sessions(db, account.id, server_id)
         if closed_count > 0:
             logger.info(f"Found and closed {closed_count} orphaned sessions for CN='{env_vars['common_name']}'")
 
-        create_session(db, account.id, env_vars, geo)
+        create_session(db, account.id, env_vars, geo, server_id)
         db.commit()
 
         logger.info("Client-connect completed successfully")

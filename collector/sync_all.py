@@ -4,10 +4,17 @@
 Выполняет фоновые задачи:
 - Синхронизация сертификатов (cert_sync) — создание accounts из неотозванных сертификатов
 - Проверка CRL (crl_checker) — обновление статуса отзыва
-- Проверка CCD файлов (ccd_checker) — обновление has_ccd
+- Проверка CCD файлов (ccd_checker) — обновление has_ccd (per-site + агрегат)
 - Очистка orphaned сессий (session_cleanup) — помечает "зависшие" сессии как error
 
 Запускается через systemd timer (openvpn-sync.timer).
+
+Роли (--role, мультисайт — docs/multisite.md):
+- all (дефолт, single-site): все четыре шага на одном хосте;
+- central (админ-хост CA): cert_sync → crl_checker — сертификаты и CRL
+  существуют только там;
+- site (сервер сайта): ccd_checker → session_cleanup — CCD и management-сокет
+  локальны для инстанса OpenVPN.
 
 Порядок выполнения важен:
 1. cert_sync создаёт accounts для неотозванных CN из сертификатов
@@ -16,6 +23,7 @@
 4. session_cleanup помечает orphaned сессии (ПОСЛЕ успешного выполнения предыдущих)
 """
 
+import argparse
 import sys
 import os
 import logging
@@ -98,19 +106,26 @@ def sync_lock(lock_path: str = None):
                 pass
 
 
-def run_sync():
+def run_sync(role: str = "all"):
     """
-    Запускает все задачи синхронизации.
+    Запускает задачи синхронизации выбранной роли.
 
-    Выполняет последовательно:
+    role="all" (single-site, дефолт):
     1. Синхронизацию сертификатов (создание accounts из неотозванных)
     2. Проверку CRL (обновление is_revoked)
     3. Проверку CCD файлов (обновление has_ccd)
     4. Очистку orphaned сессий (ПОСЛЕ успешного выполнения предыдущих)
 
+    role="central" (админ-хост CA в мультисайте): шаги 1-2.
+    role="site" (сервер сайта в мультисайте): шаги 3-4.
+
     Invariant S3.1: session_cleanup вызывается ПОСЛЕ успешного выполнения всех остальных sync-задач
     Invariant S3.2: session_cleanup вызывается ТОЛЬКО если предыдущие задачи завершились успешно
     Invariant S3.3: При ошибке session_cleanup - логируется, но не блокирует следующие запуски
+
+    S3.1/S3.2 в мультисайте действуют в пределах роли site: cleanup не зависит
+    от central-синка (он читает только sessions и mgmt), но идёт строго после
+    успешного ccd_checker своего запуска.
 
     Порядок важен: cert_sync должен выполняться первым для создания
     accounts, затем crl_checker и ccd_checker обновляют доп. поля,
@@ -128,45 +143,47 @@ def run_sync():
         # outer except → fail-fast, cleanup не выполняется, exit 1.
         sync_errors = 0
 
-        # 1. cert_sync — создаёт accounts, обновляет valid_from/valid_to
-        print("Starting certificate sync...")
-        cert_stats = sync_certificates(db) or {}
-        print(f"Certificate sync completed: {cert_stats}")
-        sync_errors += cert_stats.get("errors", 0)
+        if role in ("all", "central"):
+            # 1. cert_sync — создаёт accounts, обновляет valid_from/valid_to
+            print("Starting certificate sync...")
+            cert_stats = sync_certificates(db) or {}
+            print(f"Certificate sync completed: {cert_stats}")
+            sync_errors += cert_stats.get("errors", 0)
 
-        # 2. crl_checker — обновляет is_revoked/revoked_at
-        print("Starting CRL check...")
-        crl_stats = check_crl(db) or {}
-        print(f"CRL check completed: {crl_stats}")
-        sync_errors += crl_stats.get("errors", 0)
+            # 2. crl_checker — обновляет is_revoked/revoked_at
+            print("Starting CRL check...")
+            crl_stats = check_crl(db) or {}
+            print(f"CRL check completed: {crl_stats}")
+            sync_errors += crl_stats.get("errors", 0)
 
-        # 3. ccd_checker — обновляет has_ccd/ccd_updated_at
-        print("Starting CCD check...")
-        ccd_stats = check_ccd(db) or {}
-        print(f"CCD check completed: {ccd_stats}")
-        sync_errors += ccd_stats.get("errors", 0)
+        if role in ("all", "site"):
+            # 3. ccd_checker — обновляет ccd_status (per-site) и агрегат has_ccd
+            print("Starting CCD check...")
+            ccd_stats = check_ccd(db) or {}
+            print(f"CCD check completed: {ccd_stats}")
+            sync_errors += ccd_stats.get("errors", 0)
 
-        # S3.1/S3.2: session_cleanup выполняется ТОЛЬКО если предыдущие шаги
-        # прошли без ошибок. Иначе состояние accounts/сессий может быть неполным
-        # и cleanup ошибочно пометит живые сессии как orphaned.
-        if sync_errors == 0:
-            try:
-                print("Starting session cleanup...")
-                orphaned_count, marked_count = cleanup_orphaned_sessions(db)
-                print(f"Session cleanup completed: {orphaned_count} orphaned, {marked_count} marked")
-            except Exception as e:
-                # S3.3: ошибка cleanup логируется, но не блокирует (exit не 1)
-                print(f"Session cleanup error (non-blocking): {e}", file=sys.stderr)
-                logger.error(f"Session cleanup failed: {e}")
-        else:
-            print(
-                f"Skipping session cleanup: предыдущие шаги дали {sync_errors} ошибок "
-                f"(S3.2 — cleanup только после успешного синка)",
-                file=sys.stderr,
-            )
-            logger.warning(
-                "session_cleanup пропущен из-за %d ошибок в предыдущих шагах", sync_errors
-            )
+            # S3.1/S3.2: session_cleanup выполняется ТОЛЬКО если предыдущие шаги
+            # прошли без ошибок. Иначе состояние accounts/сессий может быть неполным
+            # и cleanup ошибочно пометит живые сессии как orphaned.
+            if sync_errors == 0:
+                try:
+                    print("Starting session cleanup...")
+                    orphaned_count, marked_count = cleanup_orphaned_sessions(db)
+                    print(f"Session cleanup completed: {orphaned_count} orphaned, {marked_count} marked")
+                except Exception as e:
+                    # S3.3: ошибка cleanup логируется, но не блокирует (exit не 1)
+                    print(f"Session cleanup error (non-blocking): {e}", file=sys.stderr)
+                    logger.error(f"Session cleanup failed: {e}")
+            else:
+                print(
+                    f"Skipping session cleanup: предыдущие шаги дали {sync_errors} ошибок "
+                    f"(S3.2 — cleanup только после успешного синка)",
+                    file=sys.stderr,
+                )
+                logger.warning(
+                    "session_cleanup пропущен из-за %d ошибок в предыдущих шагах", sync_errors
+                )
 
         # exit != 0 при ошибках синка — иначе systemd не увидит сбой
         return 0 if sync_errors == 0 else 1
@@ -183,11 +200,21 @@ def run_sync():
                 print(f"Error closing database session: {e}", file=sys.stderr)
 
 
-def main():
+def main(argv=None):
     """Точка входа для запуска синхронизации."""
+    parser = argparse.ArgumentParser(description="Периодическая синхронизация LogServer")
+    parser.add_argument(
+        "--role",
+        choices=("all", "central", "site"),
+        default="all",
+        help="all — single-site (дефолт); central — cert+crl (админ-хост CA); "
+             "site — ccd+cleanup (сервер сайта)",
+    )
+    args = parser.parse_args(argv)
+
     try:
         with sync_lock():
-            exit_code = run_sync()
+            exit_code = run_sync(args.role)
     except SyncAlreadyRunning as exc:
         # Не ошибка: таймер сработал, пока предыдущий запуск ещё идёт.
         # Возвращаем 0, иначе systemd будет считать это сбоем юнита.

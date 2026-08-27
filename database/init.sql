@@ -19,9 +19,10 @@ GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'ovpn_collector'@'localhost';
 FLUSH PRIVILEGES;
 
 -- ВНИМАНИЕ: канонический источник схемы — миграции Alembic (database/migrations)
--- и core/models.py. Этот файл держится в соответствии со схемой на ревизии 002
--- (serial_number + uk_cn_serial) для ручного bootstrap без Alembic. При новых
--- миграциях обновлять здесь согласованно ИЛИ разворачивать через `alembic upgrade head`.
+-- и core/models.py. Этот файл держится в соответствии со схемой на ревизии 005
+-- (мультисайт: vpn_servers, sessions.server_id, ccd_status) для ручного bootstrap
+-- без Alembic. При новых миграциях обновлять здесь согласованно ИЛИ разворачивать
+-- через `alembic upgrade head`.
 
 -- Таблица accounts (справочник аккаунтов; уникальность по паре cn+serial_number)
 CREATE TABLE IF NOT EXISTS accounts (
@@ -44,10 +45,22 @@ CREATE TABLE IF NOT EXISTS accounts (
     INDEX idx_has_ccd (has_ccd)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Таблица vpn_servers (справочник инстансов OpenVPN; мультисайт)
+-- Записи создаёт collector автоматически по имени из конфигурации
+CREATE TABLE IF NOT EXISTS vpn_servers (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL,
+    description VARCHAR(255),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_vpn_servers_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Таблица sessions (журнал VPN сессий)
 CREATE TABLE IF NOT EXISTS sessions (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     account_id INT UNSIGNED NOT NULL,
+    server_id INT UNSIGNED COMMENT 'Сервер сессии (NULL — legacy до мультисайта)',
     session_id VARCHAR(100),
     connected_at DATETIME NOT NULL,
     disconnected_at DATETIME,
@@ -66,7 +79,25 @@ CREATE TABLE IF NOT EXISTS sessions (
     INDEX idx_status (status),
     INDEX idx_source_ip (source_ip),
     INDEX idx_status_connected_at (status, connected_at),
-    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+    INDEX idx_server_id_status (server_id, status),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_sessions_server_id FOREIGN KEY (server_id)
+        REFERENCES vpn_servers(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Таблица ccd_status (per-site наличие CCD; мультисайт)
+-- Строка = (cn, server): CCD-файл <cn> есть на этом сервере; нет строки — нет CCD.
+-- Файлы <cn>_OFF (архив выключенного доступа) считаются отсутствием CCD.
+CREATE TABLE IF NOT EXISTS ccd_status (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    cn VARCHAR(255) NOT NULL,
+    server_id INT UNSIGNED NOT NULL,
+    ccd_updated_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ccd_cn_server (cn, server_id),
+    INDEX idx_ccd_cn (cn),
+    FOREIGN KEY (server_id) REFERENCES vpn_servers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Таблица geoip_cache (кэш GeoIP данных)

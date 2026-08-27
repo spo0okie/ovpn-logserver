@@ -92,6 +92,13 @@ class AccountLastSession(BaseModel):
     city: Optional[str] = None
 
 
+class AccountCcdSite(BaseModel):
+    """Per-site наличие CCD (мультисайт): на каких серверах у CN есть CCD-файл."""
+
+    server_name: str
+    ccd_updated_at: Optional[datetime] = None
+
+
 class AccountDetail(BaseModel):
     """Детальная информация об аккаунте с списком сертификатов."""
 
@@ -100,7 +107,8 @@ class AccountDetail(BaseModel):
     cert_count: int  # Общее количество сертификатов
     active_certs: int  # Количество активных сертификатов
     can_connect: bool  # Может ли пользователь подключаться
-    has_ccd: bool  # Есть ли CCD для этого CN
+    has_ccd: bool  # Агрегат: CCD есть хотя бы на одном сервере
+    ccd_sites: List[AccountCcdSite] = []  # На каких серверах есть CCD (мультисайт)
     last_session: Optional[AccountLastSession] = None
 
 
@@ -131,6 +139,7 @@ class SessionListItem(BaseModel):
 
     id: int
     account_cn: str
+    server_name: Optional[str] = None  # NULL — legacy-сессии до мультисайта
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
     # Готовые к показу строки в часовом поясе сервера — для клиентских таблиц,
@@ -151,6 +160,7 @@ class SessionDetail(BaseModel):
 
     id: int
     account_cn: str
+    server_name: Optional[str] = None  # NULL — legacy-сессии до мультисайта
     session_id: Optional[str] = None
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
@@ -171,6 +181,7 @@ class ActiveSessionItem(BaseModel):
 
     id: int
     account_cn: str
+    server_name: Optional[str] = None
     connected_at: datetime
     source_ip: str
     country: Optional[str] = None
@@ -196,6 +207,7 @@ class AccountSessionItem(BaseModel):
     """Элемент истории сессий аккаунта."""
 
     id: int
+    server_name: Optional[str] = None
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
     duration_seconds: Optional[int] = None
@@ -291,6 +303,28 @@ class GeographyStatsResponse(BaseModel):
     """Ответ статистики по геолокации."""
 
     data: List[GeographyStatsItem]
+
+
+# =============================================================================
+# Server схемы (мультисайт)
+# =============================================================================
+
+class ServerItem(BaseModel):
+    """Инстанс OpenVPN-сервера."""
+
+    id: int
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ServersResponse(BaseModel):
+    """Ответ списка серверов."""
+
+    data: List[ServerItem]
 
 
 # =============================================================================

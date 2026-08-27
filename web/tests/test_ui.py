@@ -462,7 +462,7 @@ class TestSessionsCsvExport:
     def test_export_has_header_and_rows(self, client: TestClient, sample_sessions, auth_headers: dict):
         body = client.get("/sessions/export/csv", headers=auth_headers).text
         lines = [l for l in body.splitlines() if l.strip()]
-        assert lines[0].lstrip("\ufeff").startswith("id;account;connected_at")
+        assert lines[0].lstrip("\ufeff").startswith("id;account;server;connected_at")
         assert len(lines) == len(sample_sessions) + 1, "строк должно быть по числу сессий плюс заголовок"
 
     def test_export_respects_filter(self, client: TestClient, sample_sessions, auth_headers: dict):

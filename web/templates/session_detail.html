@@ -52,6 +52,10 @@
                         </td>
                     </tr>
                     <tr>
+                        <td class="text-muted">Server:</td>
+                        <td>{{ session.server_name or '-' }}</td>
+                    </tr>
+                    <tr>
                         <td class="text-muted">Connected:</td>
                         <td>{% if session.connected_at %}{{ session.connected_at | local_datetime }}{% else %}-{% endif %}</td>
                     </tr>

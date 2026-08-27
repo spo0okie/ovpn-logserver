@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_, and_, desc, asc
 
-from core.models import Account, Session as SessionModel
+from core.models import Account, CcdStatus, Session as SessionModel, VpnServer
 from web.dependencies import get_db
 from web.schemas import (
     AccountListResponse,
@@ -235,6 +235,19 @@ def get_account(
     ))
     has_ccd = any(a.has_ccd for a in accounts)
 
+    # Мультисайт: на каких серверах у CN есть CCD-файл
+    ccd_sites = [
+        {
+            "server_name": server_name,
+            "ccd_updated_at": row.ccd_updated_at,
+        }
+        for row, server_name in db.query(CcdStatus, VpnServer.name)
+        .join(VpnServer, CcdStatus.server_id == VpnServer.id)
+        .filter(CcdStatus.cn == cn)
+        .order_by(VpnServer.name)
+        .all()
+    ]
+
     # Получаем последнюю сессию по любому из account_id
     account_ids = [a.id for a in accounts]
     last_session = None
@@ -261,6 +274,7 @@ def get_account(
         "active_certs": active_certs,
         "can_connect": _can_user_connect(db, cn),
         "has_ccd": has_ccd,
+        "ccd_sites": ccd_sites,
         "last_session": last_session
     }
 
@@ -302,8 +316,11 @@ def get_account_sessions(
         )
 
     # Получаем сессии для всех account_id пользователя
+    # outerjoin: legacy-сессии до мультисайта имеют server_id IS NULL
     account_ids = [a.id for a in accounts]
-    query = db.query(SessionModel).filter(SessionModel.account_id.in_(account_ids))
+    query = db.query(SessionModel, VpnServer.name).outerjoin(
+        VpnServer, SessionModel.server_id == VpnServer.id
+    ).filter(SessionModel.account_id.in_(account_ids))
 
     # I7.4: Применяем фильтры
     if from_date:
@@ -323,13 +340,14 @@ def get_account_sessions(
 
     # Формируем ответ
     sessions_data = []
-    for s in items:
+    for s, server_name in items:
         duration = None
         if s.disconnected_at and s.connected_at:
             duration = int((s.disconnected_at - s.connected_at).total_seconds())
 
         sessions_data.append({
             "id": s.id,
+            "server_name": server_name,
             "connected_at": s.connected_at,
             "disconnected_at": s.disconnected_at,
             "duration_seconds": duration,

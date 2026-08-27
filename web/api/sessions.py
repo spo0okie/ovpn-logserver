@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 
-from core.models import Account, Session as SessionModel
+from core.models import Account, Session as SessionModel, VpnServer
 from web.dependencies import get_db
 from web.utils.timezone import format_datetime
 from web.schemas import (
@@ -30,7 +30,8 @@ from web.schemas import (
 router = APIRouter(tags=["sessions"])
 
 
-def _session_to_list_item(session: SessionModel, account_cn: str) -> dict:
+def _session_to_list_item(session: SessionModel, account_cn: str,
+                          server_name: str = None) -> dict:
     """Преобразует модель Session в словарь для списка."""
     duration = None
     if session.disconnected_at and session.connected_at:
@@ -39,6 +40,7 @@ def _session_to_list_item(session: SessionModel, account_cn: str) -> dict:
     return {
         "id": session.id,
         "account_cn": account_cn,
+        "server_name": server_name,
         "connected_at": session.connected_at,
         "disconnected_at": session.disconnected_at,
         # Предформатированное локальное время: таблица сессий рендерится
@@ -76,6 +78,7 @@ def list_sessions(
     order_dir: Optional[str] = Query(None, description="Направление сортировки"),
     # Стандартные фильтры
     account: Optional[str] = Query(None, description="Фильтр по CN аккаунта"),
+    server: Optional[str] = Query(None, description="Фильтр по имени сервера (мультисайт)"),
     from_date: Optional[datetime] = Query(None, alias="from", description="Начало периода"),
     to_date: Optional[datetime] = Query(None, alias="to", description="Конец периода"),
     status: Optional[str] = Query(None, description="Фильтр по статусу"),
@@ -88,17 +91,22 @@ def list_sessions(
 
     I7.1: Только SELECT запросы
     I7.3: Пагинация через page/per_page
-    I7.4: Фильтры account, from, to, status, source_ip, country
+    I7.4: Фильтры account, server, from, to, status, source_ip, country
     Поддержка DataTable серверной обработки (search, order, pagination)
     """
     # I7.1: Только SELECT запросы
-    query = db.query(SessionModel, Account.cn).join(
+    # outerjoin: legacy-сессии до мультисайта имеют server_id IS NULL
+    query = db.query(SessionModel, Account.cn, VpnServer.name).join(
         Account, SessionModel.account_id == Account.id
+    ).outerjoin(
+        VpnServer, SessionModel.server_id == VpnServer.id
     )
 
     # I7.4: Применяем фильтры из формы
     if account:
         query = query.filter(Account.cn == account)
+    if server:
+        query = query.filter(VpnServer.name == server)
     if from_date:
         query = query.filter(SessionModel.connected_at >= from_date)
     if to_date:
@@ -116,6 +124,7 @@ def list_sessions(
         query = query.filter(
             or_(
                 Account.cn.ilike(search_pattern),
+                VpnServer.name.ilike(search_pattern),
                 SessionModel.source_ip.ilike(search_pattern),
                 SessionModel.virtual_ip.ilike(search_pattern),
                 SessionModel.country.ilike(search_pattern),
@@ -126,24 +135,26 @@ def list_sessions(
     # Сортировка
     # NOTE: duration_seconds - вычисляемое поле, не колонка БД
     # Убрано из сортировки, т.к. оно вычисляется динамически из connected_at/disconnected_at
+    # Номера колонок соответствуют таблице в sessions.html (Server — колонка 2)
     order_columns = {
         0: SessionModel.id,
         1: Account.cn,
-        2: SessionModel.connected_at,
-        # 3: SessionModel.duration_seconds,  # <-- ERROR: attribute doesn't exist
-        4: SessionModel.source_ip,
-        5: SessionModel.country,
-        6: SessionModel.virtual_ip,
-        7: SessionModel.status
+        2: VpnServer.name,
+        3: SessionModel.connected_at,
+        # 4: duration_seconds — вычисляемое поле, см. fallback ниже
+        5: SessionModel.source_ip,
+        6: SessionModel.country,
+        7: SessionModel.virtual_ip,
+        8: SessionModel.status
     }
-    
+
     if order_col is not None:
         if order_col in order_columns:
             order_expr = order_columns[order_col]
             if order_dir == "desc":
                 order_expr = order_expr.desc()
             query = query.order_by(order_expr)
-        elif order_col == 3:  # duration_seconds - сортируем по connected_at desc как fallback
+        elif order_col == 4:  # duration_seconds - сортируем по connected_at desc как fallback
             query = query.order_by(SessionModel.connected_at.desc())
     else:
         query = query.order_by(SessionModel.connected_at.desc())
@@ -155,7 +166,7 @@ def list_sessions(
     total_pages = (total + per_page - 1) // per_page
 
     # Преобразуем данные
-    data = [_session_to_list_item(s, cn) for s, cn in items]
+    data = [_session_to_list_item(s, cn, srv) for s, cn, srv in items]
 
     # Возвращаем DataTable-совместимый формат если передан draw
     if draw is not None:
@@ -192,17 +203,20 @@ def list_active_sessions(
     I7.4: Фильтр по статусу active
     """
     # I7.1: Только SELECT запросы
-    query = db.query(SessionModel, Account.cn).join(
+    query = db.query(SessionModel, Account.cn, VpnServer.name).join(
         Account, SessionModel.account_id == Account.id
+    ).outerjoin(
+        VpnServer, SessionModel.server_id == VpnServer.id
     ).filter(SessionModel.status == "active").order_by(SessionModel.connected_at.desc())
 
     items = query.all()
 
     sessions_data = []
-    for session, account_cn in items:
+    for session, account_cn, server_name in items:
         sessions_data.append({
             "id": session.id,
             "account_cn": account_cn,
+            "server_name": server_name,
             "connected_at": session.connected_at,
             "source_ip": session.source_ip,
             "country": session.country,
@@ -234,8 +248,10 @@ def get_session(
     I7.5: При отсутствии данных возвращается 404
     """
     # I7.1: Только SELECT запросы
-    result = db.query(SessionModel, Account.cn).join(
+    result = db.query(SessionModel, Account.cn, VpnServer.name).join(
         Account, SessionModel.account_id == Account.id
+    ).outerjoin(
+        VpnServer, SessionModel.server_id == VpnServer.id
     ).filter(SessionModel.id == session_id).first()
 
     # I7.5: 404 если сессия не найдена
@@ -245,7 +261,7 @@ def get_session(
             detail={"error": "Session not found", "code": "SESSION_NOT_FOUND"}
         )
 
-    session, account_cn = result
+    session, account_cn, server_name = result
 
     # Вычисляем длительность
     duration = None
@@ -255,6 +271,7 @@ def get_session(
     return {
         "id": session.id,
         "account_cn": account_cn,
+        "server_name": server_name,
         "session_id": session.session_id,
         "connected_at": session.connected_at,
         "disconnected_at": session.disconnected_at,

@@ -311,7 +311,8 @@ class TestSyncLock:
         run = mocker.patch.object(sync_all, 'run_sync')
 
         with pytest.raises(SystemExit) as exc:
-            sync_all.main()
+            # argv=[] — иначе argparse прочитает sys.argv самого pytest
+            sync_all.main([])
 
         assert exc.value.code == 0
         run.assert_not_called()

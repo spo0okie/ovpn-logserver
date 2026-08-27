@@ -42,6 +42,66 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 
+class VpnServer(Base):
+    """
+    Модель для таблицы vpn_servers - справочник OpenVPN-серверов (мультисайт).
+
+    Одна запись = один инстанс OpenVPN. У 2FA-инстанса на том же хосте свой
+    management-сокет и свои сессии, поэтому он регистрируется отдельной записью
+    (например "chl" и "chl-2fa").
+
+    Записи создаются автоматически collector'ом по имени из конфигурации
+    (openvpn.server_name / ENV OPENVPN_SERVER_NAME) — руками их заводить не нужно.
+
+    Attributes:
+        id: Первичный ключ (INT UNSIGNED AUTO_INCREMENT)
+        name: Уникальное имя инстанса (VARCHAR 64), например "chl", "msk-2fa"
+        description: Человекочитаемое описание (опционально)
+        created_at: Дата создания записи
+        updated_at: Дата последнего обновления
+        sessions: Сессии, привязанные к этому серверу
+    """
+
+    __tablename__ = "vpn_servers"
+
+    id: Mapped[int] = mapped_column(
+        get_int_type(unsigned=True, autoincrement=True),
+        primary_key=True,
+        autoincrement=True
+    )
+    name: Mapped[str] = mapped_column(
+        String(64),  # VARCHAR(64)
+        nullable=False,
+        unique=True
+    )
+    description: Mapped[Optional[str]] = mapped_column(
+        String(255),  # VARCHAR(255)
+        nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False
+    )
+
+    # server_id в сессиях nullable (legacy-строки до мультисайта), поэтому
+    # каскадного удаления нет: при удалении сервера сессии остаются с NULL.
+    sessions: Mapped[List["Session"]] = relationship(
+        "Session",
+        back_populates="server",
+        lazy="dynamic"
+    )
+
+    def __repr__(self) -> str:
+        return f"<VpnServer(id={self.id}, name='{self.name}')>"
+
+
 class Account(Base):
     """
     Модель для таблицы accounts - справочник аккаунтов OpenVPN.
@@ -264,6 +324,13 @@ class Session(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"),  # I1.3: ON DELETE CASCADE
         nullable=False
     )
+    # NULL — legacy-строки, созданные до мультисайта; они принадлежат
+    # единственному существовавшему тогда серверу (см. docs/multisite.md)
+    server_id: Mapped[Optional[int]] = mapped_column(
+        get_int_type(unsigned=True),  # INT UNSIGNED
+        ForeignKey("vpn_servers.id", ondelete="SET NULL"),
+        nullable=True
+    )
     session_id: Mapped[Optional[str]] = mapped_column(
         String(100),  # VARCHAR(100)
         nullable=True
@@ -325,9 +392,78 @@ class Session(Base):
         "Account",
         back_populates="sessions"
     )
-    
+
+    # session.server -> сервер, на котором шла сессия (None у legacy-строк)
+    server: Mapped[Optional["VpnServer"]] = relationship(
+        "VpnServer",
+        back_populates="sessions"
+    )
+
     def __repr__(self) -> str:
         return f"<Session(id={self.id}, account_id={self.account_id}, status='{self.status}')>"
+
+
+class CcdStatus(Base):
+    """
+    Модель для таблицы ccd_status - per-site наличие CCD-файлов (мультисайт).
+
+    Строка = (cn, server): CCD-файл `<cn>` есть на этом сервере. Отсутствие
+    строки = CCD нет. Файлы `<cn>_OFF` (архив выключенного доступа, который
+    admin-скрипты provision оставляют для справки) считаются отсутствием CCD
+    и строк не порождают.
+
+    CCD привязан к CN (имени конфига), а не к конкретному сертификату, поэтому
+    ключ — cn, а не account_id.
+
+    Attributes:
+        id: Первичный ключ (INT UNSIGNED AUTO_INCREMENT)
+        cn: Common Name / имя конфига (VARCHAR 255)
+        server_id: Сервер, на котором лежит CCD-файл
+        ccd_updated_at: mtime CCD-файла (naive UTC)
+        created_at: Дата создания записи
+        updated_at: Дата последнего обновления
+    """
+
+    __tablename__ = "ccd_status"
+
+    id: Mapped[int] = mapped_column(
+        get_int_type(unsigned=True, autoincrement=True),
+        primary_key=True,
+        autoincrement=True
+    )
+    cn: Mapped[str] = mapped_column(
+        String(255),  # VARCHAR(255)
+        nullable=False
+    )
+    server_id: Mapped[int] = mapped_column(
+        get_int_type(unsigned=True),  # INT UNSIGNED
+        ForeignKey("vpn_servers.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    ccd_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False
+    )
+
+    server: Mapped["VpnServer"] = relationship("VpnServer")
+
+    __table_args__ = (
+        UniqueConstraint("cn", "server_id", name="uk_ccd_cn_server"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CcdStatus(cn='{self.cn}', server_id={self.server_id})>"
 
 
 class GeoIPCache(Base):

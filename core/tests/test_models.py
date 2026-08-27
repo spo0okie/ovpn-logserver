@@ -93,9 +93,9 @@ class TestI22TableAndColumnNames:
         mapper = inspect(SessionModel)
         column_names = {col.name for col in mapper.columns}
         expected = {
-            "id", "account_id", "session_id", "connected_at", "disconnected_at",
-            "source_ip", "country", "city", "bytes_sent", "bytes_received",
-            "virtual_ip", "status", "created_at", "updated_at"
+            "id", "account_id", "server_id", "session_id", "connected_at",
+            "disconnected_at", "source_ip", "country", "city", "bytes_sent",
+            "bytes_received", "virtual_ip", "status", "created_at", "updated_at"
         }
         assert column_names == expected
     

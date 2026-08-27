@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from web.api import accounts as accounts_api
+from web.api import servers as servers_api
 from web.api import sessions as sessions_api
 from web.api import stats as stats_api
 from web.auth import (
@@ -260,16 +261,20 @@ def sessions_list(
     page: int = 1,
     per_page: int = 20,
     account: Optional[str] = None,
+    server: Optional[str] = None,
     source_ip: Optional[str] = None,
     status: Optional[str] = None,
     country: Optional[str] = None,
     _user: str = Depends(web_user),
+    db: Session = Depends(get_db),
 ):
     """
     Сервер не загружает данные — DataTables подтянет их через AJAX
-    к /api/v1/sessions. Здесь только рендер шаблона.
+    к /api/v1/sessions. Здесь только рендер шаблона (плюс список серверов
+    для выпадающего фильтра).
     """
     page, per_page = _clamp_pagination(page, per_page)
+    servers = servers_api.list_servers(db=db)
     return templates.TemplateResponse(
         "sessions.html",
         {
@@ -279,6 +284,8 @@ def sessions_list(
                 "meta": {"page": 1, "per_page": per_page, "total": 0, "total_pages": 0},
             },
             "account": account,
+            "server": server,
+            "servers": servers["data"],
             "source_ip": source_ip,
             "status": status,
             "country": country,
@@ -304,6 +311,7 @@ def session_detail(
 @router.get("/sessions/export/csv")
 def sessions_export_csv(
     account: Optional[str] = None,
+    server: Optional[str] = None,
     source_ip: Optional[str] = None,
     status: Optional[str] = None,
     country: Optional[str] = None,
@@ -320,6 +328,7 @@ def sessions_export_csv(
         page=1,
         per_page=CSV_EXPORT_LIMIT,
         account=account,
+        server=server,
         from_date=None,
         to_date=None,
         status=status,
@@ -335,7 +344,7 @@ def sessions_export_csv(
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";", lineterminator=chr(10))
     writer.writerow([
-        "id", "account", "connected_at", "disconnected_at", "duration_seconds",
+        "id", "account", "server", "connected_at", "disconnected_at", "duration_seconds",
         "source_ip", "virtual_ip", "country", "city", "status",
         "bytes_sent", "bytes_received",
     ])
@@ -344,6 +353,7 @@ def sessions_export_csv(
         writer.writerow([
             item["id"],
             item["account_cn"],
+            item.get("server_name") or "",
             # Время в зоне сервера — как на страницах, чтобы выгрузка совпадала
             # с тем, что человек видел в интерфейсе
             item.get("connected_at_local") or "",

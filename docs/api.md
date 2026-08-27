@@ -16,6 +16,7 @@
 | `GET /api/v1/sessions` | журнал сессий |
 | `GET /api/v1/sessions/active` | активные сессии |
 | `GET /api/v1/sessions/{session_id}` | детали сессии |
+| `GET /api/v1/servers` | справочник инстансов OpenVPN (мультисайт) |
 | `GET /api/v1/stats/overview` | сводные метрики |
 | `GET /api/v1/stats/connections` | подключения по периодам |
 | `GET /api/v1/stats/geography` | распределение по странам |
@@ -33,6 +34,10 @@
 `GET /api/v1/sessions` дополнительно умеет режим server-side DataTables: при
 наличии параметра `draw` принимает `search`, `order_col`, `order_dir` и отвечает
 в другом формате — `{"draw", "recordsTotal", "recordsFiltered", "data"}`.
+
+Мультисайт: элементы сессий (список, active, детали, сессии аккаунта) содержат
+`server_name` (`null` — legacy-сессии до мультисайта); `GET /api/v1/sessions`
+принимает фильтр `server=<name>`.
 
 ## Контракт аккаунтов
 
@@ -56,8 +61,11 @@
 они относятся к сертификату, а не к пользователю. Ключ детальной страницы — `cn`.
 
 `GET /accounts/{cn}` возвращает `{cn, certificates[], cert_count, active_certs,
-can_connect, has_ccd, last_session}`, где каждый элемент `certificates[]` — это
-`{id, serial_number, valid_from, valid_to, is_revoked, revoked_at}`.
+can_connect, has_ccd, ccd_sites[], last_session}`, где каждый элемент
+`certificates[]` — это `{id, serial_number, valid_from, valid_to, is_revoked,
+revoked_at}`, а `ccd_sites[]` — на каких серверах у CN есть CCD-файл (мультисайт):
+`{server_name, ccd_updated_at}`; `has_ccd` на верхнем уровне — агрегат
+«есть хотя бы на одном сервере».
 
 Фильтры списка: `is_revoked`, `has_ccd`, `search`, плюс `sort_by`
 (`cn`, `created_at`, `cert_count`, `active_certs`) и `sort_order`.

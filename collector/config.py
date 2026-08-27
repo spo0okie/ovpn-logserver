@@ -30,6 +30,7 @@ except Exception:
         "crl_file": "/etc/openvpn/crl.pem",
         "ccd_dir": "/etc/openvpn/ccd",
         "management_socket": "/var/run/openvpn/mgmt.sock",
+        "server_name": "local",
     }
 
 # Базовая директория OpenVPN
@@ -74,6 +75,13 @@ MGMT_SOCKET_PATH = os.getenv(
     _openvpn_paths.get("management_socket", "/var/run/openvpn/mgmt.sock")
 )
 
+# Имя ЭТОГО инстанса OpenVPN в мультисайте (см. docs/multisite.md).
+# Хуки и sync_site скоупят по нему сессии и CCD-статус.
+SERVER_NAME = os.getenv(
+    "OPENVPN_SERVER_NAME",
+    _openvpn_paths.get("server_name", "local")
+)
+
 
 def get_config_summary():
     """
@@ -89,6 +97,7 @@ def get_config_summary():
         "ccd_dir": CCD_DIR,
         "cert_extension": CERT_EXTENSION,
         "mgmt_socket_path": MGMT_SOCKET_PATH,
+        "server_name": SERVER_NAME,
     }
 
 

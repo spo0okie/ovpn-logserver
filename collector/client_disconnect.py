@@ -31,14 +31,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Инвариант I5.5: хук не должен падать на импорт-этапе (см. client_connect.py).
 try:
+    from sqlalchemy import or_
     from core.time import utcnow
     from core.database import SessionLocal, engine
     from core.models import Account, Session, Base
+    from collector.config import SERVER_NAME
+    from collector.server_registry import resolve_server_id
     _IMPORT_ERROR = None
 except Exception as _import_exc:  # noqa: BLE001 — сознательно ловим всё
     _IMPORT_ERROR = _import_exc
+    or_ = None
     SessionLocal = engine = None
     Account = Session = Base = None
+    SERVER_NAME = None
+    resolve_server_id = None
 
 # =============================================================================
 # Настройка логирования
@@ -140,9 +146,10 @@ def get_env_vars():
     return env_vars
 
 
-def close_active_session(db, cn: str, bytes_sent: int, bytes_received: int):
+def close_active_session(db, cn: str, bytes_sent: int, bytes_received: int,
+                         server_id: int = None):
     """
-    Закрывает последнюю активную сессию для указанного CN.
+    Закрывает последнюю активную сессию для указанного CN на ЭТОМ сервере.
 
     Находит последнюю активную сессию (ORDER BY connected_at DESC LIMIT 1)
     и обновляет её:
@@ -151,11 +158,16 @@ def close_active_session(db, cn: str, bytes_sent: int, bytes_received: int):
     - bytes_sent = переданное значение
     - bytes_received = переданное значение
 
+    Мультисайт: скоуп по server_id — отключение на одном сайте не должно
+    закрыть живую сессию того же CN на другом. Сессии с server_id IS NULL
+    (legacy до мультисайта) считаются своими.
+
     Аргументы:
         db: сессия базы данных
         cn: Common Name из сертификата
         bytes_sent: количество отправленных байт
         bytes_received: количество полученных байт
+        server_id: ID текущего сервера (None — без скоупа, старое поведение)
 
     Invariants: I5.1, I5.2, I5.3, I5.4, I5.6
     """
@@ -163,10 +175,15 @@ def close_active_session(db, cn: str, bytes_sent: int, bytes_received: int):
 
     # I5.1: Находим последнюю активную сессию по CN
     # ORDER BY connected_at DESC LIMIT 1 - берем только последнюю
-    active_session = db.query(Session).join(Account).filter(
+    query = db.query(Session).join(Account).filter(
         Account.cn == cn,
         Session.status == 'active'
-    ).order_by(Session.connected_at.desc()).first()
+    )
+    if server_id is not None:
+        query = query.filter(
+            or_(Session.server_id == server_id, Session.server_id.is_(None))
+        )
+    active_session = query.order_by(Session.connected_at.desc()).first()
 
     if active_session:
         logger.info(
@@ -243,12 +260,25 @@ def client_disconnect(db_session=None):
         else:
             logger.debug("Using provided database session")
 
+        # Мультисайт: находим ЭТОТ инстанс (create=False — I5.6, disconnect
+        # ничего не создаёт; connect уже зарегистрировал сервер). Если записи
+        # нет (сюда не подключались) — работаем без скоупа, как раньше.
+        server_id = None
+        try:
+            server_id = resolve_server_id(db, SERVER_NAME, create=False)
+        except Exception as server_exc:  # noqa: BLE001
+            logger.error(
+                "Не удалось определить сервер '%s', закрытие без скоупа: %s",
+                SERVER_NAME, server_exc,
+            )
+
         # I5.1, I5.2, I5.3, I5.4, I5.6: Закрываем активную сессию
         close_active_session(
             db,
             env_vars['common_name'],
             env_vars['bytes_sent'],
-            env_vars['bytes_received']
+            env_vars['bytes_received'],
+            server_id
         )
 
         logger.info("Client-disconnect completed successfully")

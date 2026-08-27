@@ -12,7 +12,8 @@
     DATABASE_URL                       — переопределяет всё подключение целиком
     WEB_AUTH_USERNAME, WEB_AUTH_PASSWORD, WEB_AUTH_PASSWORD_HASH
     OPENVPN_BASE_DIR, OPENVPN_CERTS_DIR, OPENVPN_CERT_EXTENSION,
-    OPENVPN_CRL_FILE, OPENVPN_CCD_DIR, OPENVPN_MGMT_SOCKET
+    OPENVPN_CRL_FILE, OPENVPN_CCD_DIR, OPENVPN_MGMT_SOCKET,
+    OPENVPN_SERVER_NAME
 """
 
 import os
@@ -148,6 +149,10 @@ def load_openvpn_config() -> Dict[str, Any]:
         "management_socket": (
             os.getenv("OPENVPN_MGMT_SOCKET") or cfg.get("management_socket", "/var/run/openvpn/mgmt.sock")
         ),
+        # Имя ЭТОГО инстанса OpenVPN в мультисайте (chl, msk-2fa, ...).
+        # Дефолт "local" — для single-site установки без правки конфига.
+        # У 2FA-инстанса на том же хосте должно быть СВОЁ имя (свой конфиг/ENV).
+        "server_name": os.getenv("OPENVPN_SERVER_NAME") or cfg.get("server_name", "local"),
     }
 
 

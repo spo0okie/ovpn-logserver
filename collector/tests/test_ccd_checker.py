@@ -348,16 +348,28 @@ class TestHelperFunctions:
         subdir.mkdir()
         
         files = find_ccd_files(str(tmp_path))
-        
+
         assert len(files) == 2
         assert 'client1' in files
         assert 'client2' in files
-        
+
         # mtime хранится в naive-UTC (utcfromtimestamp от epoch файла)
         expected1 = utcfromtimestamp(mtime1.timestamp())
         expected2 = utcfromtimestamp(mtime2.timestamp())
         assert abs((files['client1'] - expected1).total_seconds()) < 2
         assert abs((files['client2'] - expected2).total_seconds()) < 2
+
+    def test_find_ccd_files_ignores_off_suffix(self, tmp_path):
+        """
+        Файл <cn>_OFF (usr.push при disable, архив для админов) — это
+        отсутствие CCD, он игнорируется и не порождает CN 'client2_OFF'.
+        """
+        create_ccd_file('client1', 'ifconfig-push 10.8.0.10 255.255.255.0', tmp_path)
+        create_ccd_file('client2_OFF', 'ifconfig-push 10.8.0.11 255.255.255.0', tmp_path)
+
+        files = find_ccd_files(str(tmp_path))
+
+        assert set(files) == {'client1'}
 
     def test_find_ccd_files_cn_with_dot_not_truncated(self, tmp_path):
         """
@@ -412,7 +424,110 @@ class TestHelperFunctions:
         (subdir / 'file.txt').write_text('content')
         
         files = find_ccd_files(str(tmp_path))
-        
+
         assert len(files) == 1
         assert 'client' in files
         assert 'subdir' not in files
+
+
+# =============================================================================
+# Тесты мультисайта: per-site статус в ccd_status + агрегат в accounts
+# =============================================================================
+
+class TestMultisiteCcdStatus:
+    """
+    CCD-файлы лежат на каждом сервере отдельно; checker ведёт строки
+    ccd_status своего сервера (строка = CCD есть) и пересчитывает агрегат
+    accounts.has_ccd («есть хотя бы на одном сервере»).
+    """
+
+    def _server(self, db, name):
+        from collector.server_registry import resolve_server_id
+        return resolve_server_id(db, name)
+
+    def test_per_site_rows_created(self, db, tmp_path, mocker):
+        """Строка ccd_status = CCD есть; <cn>_OFF строк не порождает."""
+        from core.models import CcdStatus
+
+        create_ccd_file('client1', 'a', tmp_path)
+        create_ccd_file('client2_OFF', 'b', tmp_path)
+        db.add(Account(cn='client1'))
+        db.add(Account(cn='client2'))
+        db.commit()
+
+        sid = self._server(db, 'chl')
+        stats = check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+
+        assert stats['site_found'] == 1
+        rows = {r.cn for r in db.query(CcdStatus).filter_by(server_id=sid).all()}
+        assert rows == {'client1'}
+
+        # агрегат: у client1 CCD есть, у client2 только архивный _OFF
+        assert db.query(Account).filter_by(cn='client1').one().has_ccd is True
+        assert db.query(Account).filter_by(cn='client2').one().has_ccd is False
+
+    def test_ccd_on_one_site_keeps_aggregate(self, db, tmp_path, mocker):
+        """CCD есть только на одном из сайтов — агрегат True; исчез везде — False."""
+        site_a = tmp_path / 'a'
+        site_b = tmp_path / 'b'
+        site_a.mkdir()
+        site_b.mkdir()
+        create_ccd_file('client', 'a', site_a)   # CCD только на site-a
+        db.add(Account(cn='client'))
+        db.commit()
+
+        sid_a = self._server(db, 'site-a')
+        sid_b = self._server(db, 'site-b')
+        check_ccd(db, ccd_dir=str(site_a), server_id=sid_a)
+        check_ccd(db, ccd_dir=str(site_b), server_id=sid_b)
+
+        account = db.query(Account).filter_by(cn='client').one()
+        assert account.has_ccd is True
+
+        # выключение на site-a: usr.push переименовывает файл в _OFF
+        (site_a / 'client').rename(site_a / 'client_OFF')
+        check_ccd(db, ccd_dir=str(site_a), server_id=sid_a)
+
+        db.refresh(account)
+        assert account.has_ccd is False
+
+    def test_checker_does_not_touch_other_site_rows(self, db, tmp_path, mocker):
+        """Пустая директория одного сайта не удаляет строки другого."""
+        from core.models import CcdStatus
+
+        site_a = tmp_path / 'a'
+        site_b = tmp_path / 'b'
+        site_a.mkdir()
+        site_b.mkdir()
+        create_ccd_file('client', 'a', site_a)
+        db.add(Account(cn='client'))
+        db.commit()
+
+        sid_a = self._server(db, 'site-a')
+        sid_b = self._server(db, 'site-b')
+        check_ccd(db, ccd_dir=str(site_a), server_id=sid_a)
+        # site-b пустой: своих строк нет, чужие не трогает
+        stats_b = check_ccd(db, ccd_dir=str(site_b), server_id=sid_b)
+
+        assert stats_b['site_removed'] == 0
+        assert db.query(CcdStatus).filter_by(server_id=sid_a).count() == 1
+        assert db.query(Account).filter_by(cn='client').one().has_ccd is True
+
+    def test_removed_file_deletes_row(self, db, tmp_path, mocker):
+        """Файл исчез совсем — строка ccd_status удаляется, агрегат сбрасывается."""
+        from core.models import CcdStatus
+
+        path = create_ccd_file('client', 'a', tmp_path)
+        db.add(Account(cn='client'))
+        db.commit()
+
+        sid = self._server(db, 'chl')
+        check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+        assert db.query(CcdStatus).filter_by(server_id=sid).count() == 1
+
+        os.remove(path)
+        stats = check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+
+        assert stats['site_removed'] == 1
+        assert db.query(CcdStatus).filter_by(server_id=sid).count() == 0
+        assert db.query(Account).filter_by(cn='client').one().has_ccd is False

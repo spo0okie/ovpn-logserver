@@ -9,6 +9,12 @@
 только те сессии, которые существовали ДО снятия снимка mgmt — свежесозданные
 сессии (например, при reconnect) не трогаются.
 
+Мультисайт: management-сокет локален для ЭТОГО инстанса OpenVPN, поэтому
+сравнивать с ним можно ТОЛЬКО сессии этого сервера (sessions.server_id).
+Без скоупа первый же запуск на любом сайте пометил бы error все живые сессии
+остальных сайтов. Сессии с server_id IS NULL (legacy до мультисайта)
+считаются своими — они созданы единственным существовавшим тогда сервером.
+
 Инварианты:
 - C1.1: Находит все сессии status='active' (с connected_at < snapshot_time).
 - C1.2: Для каждой активной сессии проверяет наличие CN в Management Interface.
@@ -31,8 +37,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.time import utcnow
 
+from sqlalchemy import or_  # noqa: E402
+
 from core.database import SessionLocal  # noqa: E402
 from core.models import Session  # noqa: E402
+from collector.config import SERVER_NAME  # noqa: E402
+from collector.server_registry import resolve_server_id  # noqa: E402
 
 # ============================================================================
 # Логирование
@@ -67,14 +77,22 @@ logger.addHandler(stderr_handler)
 # ============================================================================
 
 
-def get_active_sessions(db, before: Optional[datetime] = None) -> List[Session]:
+def get_active_sessions(
+    db, before: Optional[datetime] = None, server_id: Optional[int] = None
+) -> List[Session]:
     """
     Возвращает все сессии status='active'.
     Если задан `before` — только те, что существовали до этого момента (C1.1).
+    Если задан `server_id` — только сессии этого сервера и legacy-строки с
+    server_id IS NULL (мультисайт: чужие сайты не трогаем).
     """
     query = db.query(Session).filter(Session.status == "active")
     if before is not None:
         query = query.filter(Session.connected_at < before)
+    if server_id is not None:
+        query = query.filter(
+            or_(Session.server_id == server_id, Session.server_id.is_(None))
+        )
     return query.all()
 
 
@@ -97,17 +115,34 @@ def get_orphaned_sessions(
 
 
 def cleanup_orphaned_sessions(
-    db, connected_cns: Optional[Set[str]] = None
+    db, connected_cns: Optional[Set[str]] = None,
+    server_id: Optional[int] = None,
 ) -> Tuple[int, int]:
     """
-    Помечает orphaned active-сессии как error.
+    Помечает orphaned active-сессии ЭТОГО сервера как error.
+
+    Мультисайт: сравнение с mgmt валидно только в пределах одного инстанса,
+    поэтому cleanup работает строго по server_id. Если server_id не передан,
+    инстанс определяется по имени из конфигурации (openvpn.server_name);
+    ошибка определения — fail-closed, cleanup пропускается (в духе C1.7).
+    Legacy-сессии с server_id IS NULL считаются своими.
 
     Возвращает (orphaned_count, marked_count).
     Идемпотентна (C1.6): повторный запуск не меняет уже закрытые сессии.
     """
-    logger.info("Starting orphaned session cleanup")
+    logger.info("Starting orphaned session cleanup (server '%s')", SERVER_NAME)
 
     snapshot_time = utcnow()
+
+    if server_id is None:
+        try:
+            server_id = resolve_server_id(db, SERVER_NAME)
+        except Exception as exc:
+            logger.error(
+                "Failed to resolve server '%s': %s — skipping cleanup",
+                SERVER_NAME, exc,
+            )
+            return 0, 0
 
     if connected_cns is None:
         try:
@@ -118,7 +153,8 @@ def cleanup_orphaned_sessions(
             return 0, 0
 
     # C1.1: активные сессии до snapshot_time, чтобы не зацепить свежий reconnect.
-    active_sessions = get_active_sessions(db, before=snapshot_time)
+    # Только сессии ЭТОГО сервера (+ legacy NULL).
+    active_sessions = get_active_sessions(db, before=snapshot_time, server_id=server_id)
     active_count = len(active_sessions)
     logger.info(
         "Active sessions before snapshot: %d, mgmt connected: %d",

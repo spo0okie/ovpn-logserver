@@ -43,9 +43,9 @@ alembic -c database/alembic.ini revision -m "описание"
 
 - **`collector/`** — запись данных. Два пути:
   - **Script-hooks** `client_connect.py` / `client_disconnect.py` — вызываются самим OpenVPN на каждое (от)подключение через `client-connect`/`client-disconnect` в server.conf. Читают переменные окружения OpenVPN, пишут в БД.
-  - **Периодическая синхронизация** `sync_all.py` (systemd timer `openvpn-sync.timer`) — запускает по порядку: `cert_sync` → `crl_checker` → `ccd_checker` → `session_cleanup`. Порядок важен: cleanup идёт только после успешной синхронизации.
+  - **Периодическая синхронизация** `sync_all.py` (systemd timer `openvpn-sync.timer`) — запускает по порядку: `cert_sync` → `crl_checker` → `ccd_checker` → `session_cleanup`. Порядок важен: cleanup идёт только после успешной синхронизации. Мультисайт: `--role central` (cert+crl, админ-хост CA) / `--role site` (ccd+cleanup, сервер сайта); дефолт `all` — single-site.
   - `mgmt_client.py` — чтение management-сокета OpenVPN (список живых клиентов для orphan-detection).
-- **`core/`** — `models.py` (SQLAlchemy: Account, Session, ConnectionAttempt, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
+- **`core/`** — `models.py` (SQLAlchemy: Account, Session, VpnServer, CcdStatus, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
 - **`web/`** — FastAPI: `api/{accounts,sessions,stats}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
 - **`database/`** — Alembic (`alembic.ini`, `migrations/`) и `init.sql`.
 
@@ -58,6 +58,7 @@ alembic -c database/alembic.ini revision -m "описание"
 - **Hooks не ломают VPN**: `client_connect.py`/`client_disconnect.py` при ЛЮБОЙ ошибке возвращают exit 0. Ненулевой exit из client-connect заблокирует подключение клиента.
 - **Серийные номера сертификатов** — всегда через `core.serial.normalize_serial()` (канон — decimal-строка). OpenVPN отдаёт decimal, cryptography — int, старые данные — вперемешку; прямое сравнение без нормализации даёт дубли accounts.
 - **Схема БД имеет несколько источников правды**: миграции Alembic (канон), `database/init.sql` и `core/models.py`. Любое изменение схемы — согласованно во всех местах. `docker/mysql/init.sql` таблиц НЕ создаёт (только `ALTER DATABASE`) — иначе конфликт с `alembic upgrade head` и crash-loop web-контейнера.
+- **Мультисайт-скоупинг по серверу**: `session_cleanup`, C5.x в `client_connect` и I5.1 в `client_disconnect` работают строго в пределах `sessions.server_id` (имя инстанса — `openvpn.server_name`/ENV `OPENVPN_SERVER_NAME`; `server_id IS NULL` = legacy, считается своим). Убрать скоуп — значит массово пометить `error` живые сессии чужих сайтов. Контекст: `docs/multisite.md`.
 - **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. E2E в Docker — единственная проверка на реальном MySQL.
 - **Время**: канон хранения — naive UTC, получать только через `core.time.utcnow()` / `utcfromtimestamp()` (не `datetime.utcnow()` — он устарел, и не `datetime.now(timezone.utc)` — aware-время при сравнении с БД даёт `TypeError`). Исключение: `web/auth.py` (файловые сессии, aware, БД не касается). Отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
 - **Прямой вызов функций API из UI-роутов**: FastAPI не применяет `Query(...)` — незаданные аргументы приходят объектами `Query`, а не значениями по умолчанию, и попадают в SQL. Передавать все параметры явно (см. `web/routes/pages.py`).
@@ -75,6 +76,7 @@ alembic -c database/alembic.ini revision -m "описание"
 - `api.md` — контракт REST API (multi-cert: список агрегирован по CN).
 - `multi-certificate.md` — модель «строка = сертификат», нормализация серийников, `legacy_*`.
 - `openvpn-setup.md` — что обязано быть в `server.conf`, иначе collector молча не собирает данные.
+- `multisite.md` — развёртывание на несколько OpenVPN-серверов с центральным CA: роли синка, `server_name`, скоупинг сессий/CCD по серверу.
 - `deployment.md` — развёртывание и systemd.
 - `timezone.md` — naive-UTC в БД, конвертация на границе отображения.
 - `known-gaps.md` — что заявлено, но не работает.

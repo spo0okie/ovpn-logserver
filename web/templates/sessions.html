@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1><i class="bi bi-diagram-3"></i> Sessions</h1>
     <div>
-        <a href="/sessions/export/csv?account={{ account or '' }}&source_ip={{ source_ip or '' }}&status={{ status or '' }}&country={{ country or '' }}"
+        <a href="/sessions/export/csv?account={{ account or '' }}&server={{ server or '' }}&source_ip={{ source_ip or '' }}&status={{ status or '' }}&country={{ country or '' }}"
            class="btn btn-outline-primary">
             <i class="bi bi-download"></i> Export CSV
         </a>
@@ -26,14 +26,22 @@
             <div class="col-md-3">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-person"></i></span>
-                    <input type="text" class="form-control" name="account" 
+                    <input type="text" class="form-control" name="account"
                            placeholder="Account CN..." value="{{ account or '' }}">
                 </div>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
+                <select class="form-select" name="server" title="VPN server">
+                    <option value="">All Servers</option>
+                    {% for srv in servers %}
+                    <option value="{{ srv.name }}" {% if server == srv.name %}selected{% endif %}>{{ srv.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-globe"></i></span>
-                    <input type="text" class="form-control" name="source_ip" 
+                    <input type="text" class="form-control" name="source_ip"
                            placeholder="Source IP..." value="{{ source_ip or '' }}">
                 </div>
             </div>
@@ -47,13 +55,13 @@
             <div class="col-md-2">
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-geo"></i></span>
-                    <input type="text" class="form-control" name="country" 
+                    <input type="text" class="form-control" name="country"
                            placeholder="Country..." value="{{ country or '' }}">
                 </div>
             </div>
-            <div class="col-md-2">
+            <div class="col-md-1">
                 <button type="submit" class="btn btn-primary w-100">
-                    <i class="bi bi-funnel"></i> Filter
+                    <i class="bi bi-funnel"></i>
                 </button>
             </div>
         </form>
@@ -69,6 +77,7 @@
                     <tr>
                         <th>ID</th>
                         <th>Account</th>
+                        <th>Server</th>
                         <th>Connected</th>
                         <th>Duration</th>
                         <th>Source IP</th>
@@ -117,12 +126,14 @@
         // Получаем параметры фильтров из URL
         var urlParams = new URLSearchParams(window.location.search);
         var initialAccount = urlParams.get('account') || '';
+        var initialServer = urlParams.get('server') || '';
         var initialSourceIp = urlParams.get('source_ip') || '';
         var initialStatus = urlParams.get('status') || '';
         var initialCountry = urlParams.get('country') || '';
-        
+
         console.log('[Sessions] Initial filters:', {
             account: initialAccount,
+            server: initialServer,
             source_ip: initialSourceIp,
             status: initialStatus,
             country: initialCountry
@@ -146,6 +157,7 @@
                     page: page,
                     per_page: per_page,
                     account: initialAccount,
+                    server: initialServer,
                     source_ip: initialSourceIp,
                     status: initialStatus,
                     country: initialCountry
@@ -193,6 +205,9 @@
                     return '<a href="/sessions/' + data + '">#' + data + '</a>';
                 }},
                 { data: 'account_cn', name: 'account', orderable: true },
+                { data: 'server_name', name: 'server', orderable: true, render: function(data, type, row) {
+                    return data || '-';
+                }},
                 // Показываем connected_at_local — время в зоне сервера, как на
                 // остальных страницах. Само connected_at приходит в UTC и
                 // используется для сортировки/фильтрации на сервере.
@@ -226,7 +241,7 @@
                     return '<small><span class="text-success"><i class="bi bi-arrow-up"></i> ' + sent + ' MB</span><br><span class="text-info"><i class="bi bi-arrow-down"></i> ' + received + ' MB</span></small>';
                 }}
             ],
-            order: [[2, 'desc']],
+            order: [[3, 'desc']],
             language: {
                 search: 'Search:',
                 lengthMenu: 'Show _MENU_ entries',
@@ -248,11 +263,13 @@
             e.preventDefault();
             console.log('[Sessions] Filter form submitted');
             initialAccount = $('input[name="account"]').val();
+            initialServer = $('select[name="server"]').val();
             initialSourceIp = $('input[name="source_ip"]').val();
             initialStatus = $('select[name="status"]').val();
             initialCountry = $('input[name="country"]').val();
             console.log('[Sessions] New filters:', {
                 account: initialAccount,
+                server: initialServer,
                 source_ip: initialSourceIp,
                 status: initialStatus,
                 country: initialCountry

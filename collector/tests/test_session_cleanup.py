@@ -493,3 +493,81 @@ class TestMainFunction:
                 mock_cleanup.assert_called_once()
                 # Проверяем что возвращаемый код 0
                 assert result == 0
+
+
+class TestMultisiteScoping:
+    """
+    Мультисайт: cleanup сравнивает с mgmt ТОЛЬКО сессии своего сервера.
+    Сессии чужих серверов не трогаются; legacy-строки (server_id IS NULL)
+    считаются своими.
+    """
+
+    def _make_session(self, db, cn, server_id=None):
+        from core.models import Account, Session
+
+        account = db.query(Account).filter_by(cn=cn).first()
+        if account is None:
+            account = Account(cn=cn, serial_number="s-" + cn)
+            db.add(account)
+            db.commit()
+        session = Session(
+            account_id=account.id,
+            server_id=server_id,
+            connected_at=utcnow() - timedelta(hours=1),
+            source_ip="10.0.0.1",
+            status="active",
+        )
+        db.add(session)
+        db.commit()
+        return session
+
+    def test_cleanup_does_not_touch_other_server_sessions(self, db):
+        """Живая сессия чужого сайта не помечается error нашим cleanup'ом."""
+        from collector.server_registry import resolve_server_id
+        from collector.session_cleanup import cleanup_orphaned_sessions
+
+        sid_a = resolve_server_id(db, "site-a")
+        sid_b = resolve_server_id(db, "site-b")
+        our_orphan = self._make_session(db, "user1", server_id=sid_a)
+        foreign_live = self._make_session(db, "user2", server_id=sid_b)
+
+        # mgmt сайта A видит только other_cn — user1 orphaned, user2 не наш
+        orphaned, marked = cleanup_orphaned_sessions(
+            db, connected_cns={"other_cn"}, server_id=sid_a
+        )
+
+        assert marked == 1
+        db.refresh(our_orphan)
+        db.refresh(foreign_live)
+        assert our_orphan.status == "error"
+        assert foreign_live.status == "active"
+
+    def test_cleanup_claims_legacy_null_sessions(self, db):
+        """Legacy-сессии с server_id IS NULL обрабатываются как свои."""
+        from collector.server_registry import resolve_server_id
+        from collector.session_cleanup import cleanup_orphaned_sessions
+
+        sid = resolve_server_id(db, "site-a")
+        legacy = self._make_session(db, "user1", server_id=None)
+
+        orphaned, marked = cleanup_orphaned_sessions(
+            db, connected_cns={"other_cn"}, server_id=sid
+        )
+
+        assert marked == 1
+        db.refresh(legacy)
+        assert legacy.status == "error"
+
+    def test_cleanup_fail_closed_scope_is_per_server(self, db):
+        """C1.7 действует в пределах сервера: пустой mgmt при живых СВОИХ сессиях — пропуск."""
+        from collector.server_registry import resolve_server_id
+        from collector.session_cleanup import cleanup_orphaned_sessions
+
+        sid = resolve_server_id(db, "site-a")
+        own = self._make_session(db, "user1", server_id=sid)
+
+        orphaned, marked = cleanup_orphaned_sessions(db, connected_cns=set(), server_id=sid)
+
+        assert (orphaned, marked) == (0, 0)
+        db.refresh(own)
+        assert own.status == "active"
