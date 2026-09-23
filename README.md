@@ -13,6 +13,8 @@
   Поддерживается несколько сертификатов на одного пользователя.
 - **Обнаружение оборванных сессий** — если сервер упал и отключение не было
   зафиксировано, сессия помечается отдельным статусом, а не висит активной вечно.
+- **Несколько OpenVPN-серверов** с общим CA (мультисайт) — сессии и CCD
+  привязаны к серверу, веб-интерфейс и БД общие. См. [docs/multisite.md](docs/multisite.md).
 - **REST API** под `/api/v1` и веб-интерфейс на Jinja2 + Bootstrap.
 
 ## Как это работает
@@ -28,7 +30,7 @@ management-сокет. Веб-приложение только читает и�
 ## Требования
 
 - Linux (проверялось на Debian), OpenVPN 2.5+
-- Python 3.9+
+- Python 3.10+ (зафиксированные версии alembic и python-multipart ниже 3.10 не ставятся)
 - MySQL 8.0+
 
 ## Быстрый старт
@@ -41,6 +43,7 @@ pip install -r requirements-dev.txt
 cp config/database.yaml.example config/database.yaml
 cp config/auth.yaml.example     config/auth.yaml
 cp config/web.yaml.example      config/web.yaml
+cp config/openvpn.yaml.example  config/openvpn.yaml   # пути PKI/CCD и имя сервера — для collector
 # заполнить значения; либо задать всё через ENV и не создавать yaml вовсе
 
 alembic -c database/alembic.ini upgrade head
@@ -77,12 +80,13 @@ ENUM и внешним ключам локально не ловятся.
 | Документ | О чём |
 |---|---|
 | [architecture.md](docs/architecture.md) | компоненты, границы модулей, принятые решения |
-| [invariants.md](docs/invariants.md) | расшифровка кодов `I4.5`, `C1.7`, `M1.4` из докстрингов |
+| [invariants.md](docs/invariants.md) | расшифровка кодов `I4.5`, `C1.7`, `M1.4`, `S3.2` из докстрингов |
 | [database.md](docs/database.md) | схема, миграции, расхождение моделей и MySQL-типов |
 | [api.md](docs/api.md) | контракт REST API |
 | [multi-certificate.md](docs/multi-certificate.md) | несколько сертификатов на пользователя |
 | [openvpn-setup.md](docs/openvpn-setup.md) | требования к `server.conf` |
 | [deployment.md](docs/deployment.md) | развёртывание и systemd |
+| [multisite.md](docs/multisite.md) | несколько OpenVPN-серверов с центральным CA |
 | [timezone.md](docs/timezone.md) | как хранится и отображается время |
 | [known-gaps.md](docs/known-gaps.md) | что заявлено, но не работает |
 | [connection-attempts.md](docs/connection-attempts.md) | почему не собираются неудачные попытки |

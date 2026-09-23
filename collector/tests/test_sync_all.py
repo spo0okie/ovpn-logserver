@@ -316,3 +316,42 @@ class TestSyncLock:
 
         assert exc.value.code == 0
         run.assert_not_called()
+
+
+class TestSyncRoleSelection:
+    """Роль синка: --role > ENV SYNC_ROLE > "all"; опечатка в ENV — громкий сбой."""
+
+    def _run_main(self, sync_all, mocker, argv):
+        run = mocker.patch.object(sync_all, 'run_sync', return_value=0)
+        with pytest.raises(SystemExit) as exc:
+            sync_all.main(argv)
+        return run, exc.value.code
+
+    def test_default_role_is_all(self, mocker, monkeypatch):
+        from collector import sync_all
+        monkeypatch.delenv('SYNC_ROLE', raising=False)
+        run, code = self._run_main(sync_all, mocker, [])
+        assert code == 0
+        run.assert_called_once_with('all')
+
+    def test_role_from_env(self, mocker, monkeypatch):
+        """Админ-хост: Environment=SYNC_ROLE=central в drop-in штатного юнита."""
+        from collector import sync_all
+        monkeypatch.setenv('SYNC_ROLE', 'central')
+        run, code = self._run_main(sync_all, mocker, [])
+        assert code == 0
+        run.assert_called_once_with('central')
+
+    def test_flag_overrides_env(self, mocker, monkeypatch):
+        from collector import sync_all
+        monkeypatch.setenv('SYNC_ROLE', 'central')
+        run, code = self._run_main(sync_all, mocker, ['--role', 'site'])
+        run.assert_called_once_with('site')
+
+    def test_invalid_env_role_fails_loudly(self, mocker, monkeypatch):
+        """Опечатка в SYNC_ROLE не должна молча превратиться в синк не той роли."""
+        from collector import sync_all
+        monkeypatch.setenv('SYNC_ROLE', 'centarl')
+        run, code = self._run_main(sync_all, mocker, [])
+        assert code == 2  # argparse parser.error
+        run.assert_not_called()

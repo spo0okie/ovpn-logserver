@@ -9,17 +9,17 @@ CREATE DATABASE IF NOT EXISTS openvpn_logs
 USE openvpn_logs;
 
 -- Создание пользователя (замените 'your_secure_password' на реальный пароль)
-CREATE USER IF NOT EXISTS 'ovpn_collector'@'localhost'
+CREATE USER IF NOT EXISTS 'openvpn_user'@'localhost'
     IDENTIFIED BY 'your_secure_password';
 
 -- Предоставление прав
-GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'ovpn_collector'@'localhost';
+GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
 
 -- Применение изменений
 FLUSH PRIVILEGES;
 
 -- ВНИМАНИЕ: канонический источник схемы — миграции Alembic (database/migrations)
--- и core/models.py. Этот файл держится в соответствии со схемой на ревизии 005
+-- (core/models.py — упрощённая ORM-проекция). Этот файл держится в соответствии со схемой на ревизии 005
 -- (мультисайт: vpn_servers, sessions.server_id, ccd_status) для ручного bootstrap
 -- без Alembic. При новых миграциях обновлять здесь согласованно ИЛИ разворачивать
 -- через `alembic upgrade head`.
@@ -28,7 +28,7 @@ FLUSH PRIVILEGES;
 CREATE TABLE IF NOT EXISTS accounts (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cn VARCHAR(255) NOT NULL,
-    serial_number VARCHAR(64) NOT NULL DEFAULT 'unknown',
+    serial_number VARCHAR(64) NOT NULL,  -- 'unknown' подставляет код, DB-дефолта нет (как в миграции 002)
     valid_from DATETIME,
     valid_to DATETIME,
     is_revoked BOOLEAN NOT NULL DEFAULT FALSE,

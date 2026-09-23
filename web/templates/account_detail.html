@@ -226,6 +226,10 @@
                     <div class="col-md-6">
                         <table class="table table-borderless">
                             <tr>
+                                <td class="text-muted">Server:</td>
+                                <td>{{ account.last_session.server_name or '-' }}</td>
+                            </tr>
+                            <tr>
                                 <td class="text-muted">Source IP:</td>
                                 <td><code>{{ account.last_session.source_ip }}</code></td>
                             </tr>

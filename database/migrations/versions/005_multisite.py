@@ -84,8 +84,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index('idx_server_id_status', table_name='sessions')
+    # Сначала FK, потом индекс: MySQL может молча удалить автоиндекс FK, когда
+    # появляется другой индекс с тем же левым столбцом (idx_server_id_status),
+    # и тогда drop_index до снятия FK падает с ошибкой 1553.
     op.drop_constraint('fk_sessions_server_id', 'sessions', type_='foreignkey')
+    op.drop_index('idx_server_id_status', table_name='sessions')
     op.drop_column('sessions', 'server_id')
     op.drop_table('ccd_status')
     op.drop_table('vpn_servers')

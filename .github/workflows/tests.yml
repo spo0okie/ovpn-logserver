@@ -75,6 +75,10 @@ jobs:
       # (см. TEST_DB_CONFIG в test_schema.py), а не DB_*/DATABASE_URL.
       - name: Тесты схемы
         env:
+          # test_migration_* запускают alembic подпроцессом: он берёт БД из
+          # конфигурации приложения (DATABASE_URL), а не из TEST_DB_*. Без этой
+          # строки alembic падает на ConfigError — в CI нет config/database.yaml.
+          DATABASE_URL: mysql+pymysql://openvpn_user:ci_password@127.0.0.1:3306/openvpn_logs
           TEST_DB_HOST: 127.0.0.1
           TEST_DB_PORT: '3306'
           TEST_DB_NAME: openvpn_logs

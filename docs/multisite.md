@@ -203,21 +203,35 @@ sudo systemctl enable --now openvpn-sync-site.timer
 
 ## Два инстанса OpenVPN на одном хосте (обычный + 2FA)
 
-**Раскладывать сборщик по двум папкам не нужно — один каталог
-`/opt/openvpn-logserver` обслуживает оба инстанса.** Это работает потому, что
-в самом каталоге не хранится ничего инстанс-специфичного:
+Инстансы на одном хосте — **независимые серверы**: у каждого свой CCD-каталог,
+свой management-сокет, своя база пользователей. То, что в provision оба обычно
+смотрят в один `/etc/openvpn/mobile/ccd`, — частный случай этой конкретной
+раскладки, а не общее правило. Поэтому ниже CCD-каталог задаётся каждому
+инстансу явно.
 
-- код и venv у инстансов идентичны;
-- `config/database.yaml` (центральный MySQL) и `ccd_dir` общие для хоста;
-- а то, что у инстансов различается — имя (`server_name`), management-сокет,
-  lock-файл синка — задаётся **снаружи**, переменными окружения того процесса,
-  который запускается: хукам их передаёт OpenVPN (`setenv` в server.conf),
-  синку — systemd (`Environment=` в юните). ENV имеет приоритет над YAML
-  (`core/config.py`), поэтому одна и та же папка ведёт себя по-разному в
-  зависимости от того, кто её запустил.
+**Раскладывать сборщик по двум папкам при этом не нужно — один каталог
+`/opt/openvpn-logserver` обслуживает оба инстанса.** Всё инстанс-специфичное
+(имя, CCD-каталог, mgmt-сокет, lock-файл синка) задаётся **снаружи**,
+переменными окружения того процесса, который запускается: хукам их передаёт
+OpenVPN (`setenv` в server.conf), синку — systemd (`EnvironmentFile=`). ENV
+имеет приоритет над YAML (`core/config.py`), поэтому одна и та же папка ведёт
+себя по-разному в зависимости от того, кто её запустил. В самой папке остаётся
+только общее: код, venv и `config/database.yaml` (центральный MySQL).
 
-Захардкоженных путей, мешающих этому, нет. Для справки — какие пути вообще
-зашиты и что с ними:
+Что различается у инстансов:
+
+| Что | ENV-переменная | Кому нужно |
+|---|---|---|
+| имя инстанса | `OPENVPN_SERVER_NAME` | хукам и синку |
+| CCD-каталог | `OPENVPN_CCD_DIR` | синку (`ccd_checker`) |
+| management-сокет | `OPENVPN_MGMT_SOCKET` | синку (`session_cleanup`) |
+| lock-файл синка | `SYNC_LOCK_PATH` | синку |
+
+При такой схеме инстанс-специфичные ключи в `config/openvpn.yaml`
+(`server_name`, `ccd_dir`, `management_socket`) можно вообще не заполнять —
+источником правды для них становятся server.conf и env-файлы инстансов.
+
+Захардкоженных путей, мешающих этому, нет. Для справки — что вообще зашито:
 
 | Путь | Где зашит | Примечание |
 |---|---|---|
@@ -225,44 +239,48 @@ sudo systemctl enable --now openvpn-sync-site.timer
 | `/var/run/openvpn-logserver/sync.lock` | дефолт lock-файла синка | **один на хост** → при двух инстансах обязателен свой `SYNC_LOCK_PATH` у каждого (иначе таймеры перекрываются и второй запуск молча пропускается) |
 | `/var/log/openvpn-logserver/` | логи хуков/синка | общий на хост: записи обоих инстансов идут в одни файлы — это ок |
 
-При двух инстансах различаются ровно три вещи:
-
-| Что | Инстанс `chl` | Инстанс `chl-2fa` | Кто передаёт |
-|---|---|---|---|
-| `server_name` | `chl` | `chl-2fa` | хукам — `setenv` в server.conf; синку — systemd |
-| management-сокет | `/run/openvpn/mgmt-chl.sock` | `/run/openvpn/mgmt-chl-2fa.sock` | синку — systemd (хукам не нужен) |
-| lock-файл синка | `sync-chl.lock` | `sync-chl-2fa.lock` | systemd (`SYNC_LOCK_PATH`) |
-
-При такой схеме в `config/openvpn.yaml` инстанс-специфичные ключи
-(`server_name`, `management_socket`) можно вообще не заполнять — источником
-правды для них становятся server.conf и systemd-юниты.
-
-CCD-каталог у обоих инстансов один (`/etc/openvpn/mobile/ccd` — provision пушит
-в него один раз на хост): каждый инстанс просто заведёт свои строки
-`ccd_status`, содержимое совпадёт.
-
-**Хуки.** Обёртки в `/etc/openvpn/scripts/` общие. Имя инстанса хук получает
-через `setenv` в server.conf — OpenVPN передаёт такие переменные окружения в
-script-хуки:
+**Хуки.** Обёртки в `/etc/openvpn/scripts/` общие. Хукам нужно только имя
+инстанса — они не читают ни CCD, ни mgmt-сокет. Имя передаётся через `setenv`
+в server.conf (OpenVPN передаёт такие переменные в script-хуки):
 
 ```
 # server.conf обычного инстанса
 setenv OPENVPN_SERVER_NAME chl
 management /run/openvpn/mgmt-chl.sock unix
+client-config-dir /etc/openvpn/mobile/ccd
 client-connect  /etc/openvpn/scripts/client-connect
 client-disconnect /etc/openvpn/scripts/client-disconnect
 
 # server-2fa.conf
 setenv OPENVPN_SERVER_NAME chl-2fa
 management /run/openvpn/mgmt-chl-2fa.sock unix
+client-config-dir /etc/openvpn/mobile/ccd-2fa
 client-connect  /etc/openvpn/scripts/client-connect
 client-disconnect /etc/openvpn/scripts/client-disconnect
 ```
 
-(`OPENVPN_MGMT_SOCKET` хукам не нужен — сокет использует только session_cleanup.)
+**Синхронизация.** По env-файлу на инстанс — пути произвольные, выводить их из
+имени инстанса не требуется:
 
-**Синхронизация.** Второй пары unit-файлов писать не нужно — шаблонный юнит,
-инстанс = имя сервера:
+```bash
+# /etc/openvpn-logserver/chl.env
+OPENVPN_SERVER_NAME=chl
+OPENVPN_CCD_DIR=/etc/openvpn/mobile/ccd
+OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt-chl.sock
+SYNC_LOCK_PATH=/var/run/openvpn-logserver/sync-chl.lock
+
+# /etc/openvpn-logserver/chl-2fa.env
+OPENVPN_SERVER_NAME=chl-2fa
+OPENVPN_CCD_DIR=/etc/openvpn/mobile/ccd-2fa
+OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt-chl-2fa.sock
+SYNC_LOCK_PATH=/var/run/openvpn-logserver/sync-chl-2fa.lock
+```
+
+Значения `client-config-dir` и `management` в env-файле обязаны совпадать с
+server.conf соответствующего инстанса.
+
+Один шаблонный юнит на все инстансы хоста (`%i` — имя инстанса, оно же имя
+env-файла):
 
 ```ini
 # /etc/systemd/system/openvpn-sync-site@.service
@@ -272,11 +290,7 @@ Description=OpenVPN LogServer site sync (%i)
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/openvpn-logserver
-Environment=OPENVPN_SERVER_NAME=%i
-Environment=OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt-%i.sock
-# Дефолтный lock один на хост — у каждого инстанса свой, иначе таймеры
-# будут перекрываться и второй запуск пропускаться (SyncAlreadyRunning)
-Environment=SYNC_LOCK_PATH=/var/run/openvpn-logserver/sync-%i.lock
+EnvironmentFile=/etc/openvpn-logserver/%i.env
 ExecStart=/opt/openvpn-logserver/venv/bin/python collector/sync_all.py --role site
 
 # /etc/systemd/system/openvpn-sync-site@.timer
@@ -294,22 +308,30 @@ sudo systemctl enable --now openvpn-sync-site@chl.timer
 sudo systemctl enable --now openvpn-sync-site@chl-2fa.timer
 ```
 
-Именование сокетов должно совпадать с шаблоном `mgmt-%i.sock` — тогда один
-unit-файл обслуживает все инстансы хоста. Сайт без 2FA включает только
-`openvpn-sync-site@<site>.timer`.
+Сайт без 2FA включает только `openvpn-sync-site@<site>.timer` (env-файл всё
+равно удобнее завести — единообразие и явные пути).
 
-MySQL-пользователь у обоих инстансов общий (один на сайт).
+MySQL-пользователь у инстансов одного хоста может быть общим (один на сайт).
+
+**Если инстансы всё же делят один CCD-каталог** (штатная раскладка provision:
+`remoteCcdDir` один на хост, режим клиента определяется подсетью в самом CCD) —
+это рабочий вариант, просто укажите обоим один и тот же `OPENVPN_CCD_DIR`.
+Следствие: пользователь с CCD будет показан как имеющий CCD на **обоих** именах
+инстанса — logserver не разбирает подсети из `ifconfig-push`, чтобы понять,
+какому из инстансов принадлежит файл. Если нужна точность до инстанса —
+разнесите каталоги.
 
 ### Вариант Б: две физические копии
 
 Если ENV-переопределения не по душе, два клона тоже работают
 (`/opt/openvpn-logserver-chl` и `/opt/openvpn-logserver-chl-2fa`): у каждого
-свой venv, свой `config/openvpn.yaml` с `server_name`/`management_socket`,
-свои копии обёрток хуков с поправленным `PROJECT_PATH`, свой обычный (не
-шаблонный) sync-юнит с `WorkingDirectory` на свою папку. Два подводных камня
-остаются и здесь, потому что зашиты не в папку, а в хост: lock-файл синка
-(`SYNC_LOCK_PATH` всё равно задать разными) и общий каталог логов. Вариант с
-одной папкой предпочтительнее: одно обновление кода и зависимостей вместо двух.
+свой venv, свой `config/openvpn.yaml` с `server_name`/`ccd_dir`/
+`management_socket`, свои копии обёрток хуков с поправленным `PROJECT_PATH`,
+свой обычный (не шаблонный) sync-юнит с `WorkingDirectory` на свою папку. Два
+подводных камня остаются и здесь, потому что зашиты не в папку, а в хост:
+lock-файл синка (`SYNC_LOCK_PATH` всё равно задать разными) и общий каталог
+логов. Вариант с одной папкой предпочтительнее: одно обновление кода и
+зависимостей вместо двух.
 
 ## MySQL: доступ с сайтов
 
@@ -340,7 +362,14 @@ TLS (`REQUIRE SSL`).
 #    но события подключений теряются, поэтому пауза должна быть короткой)
 cd /opt/openvpn-logserver
 sudo git pull
-sudo venv/bin/alembic -c database/alembic.ini upgrade head   # применит 005
+
+# alembic ставится из database/requirements.txt — в venv его может не быть
+# (если ставили только collector/web). Команда идемпотентна:
+sudo venv/bin/pip install -r database/requirements.txt
+
+# Миграции запускать через python -m: так гарантированно используется
+# интерпретатор и пакеты venv, даже если консольного скрипта venv/bin/alembic нет
+sudo venv/bin/python -m alembic -c database/alembic.ini upgrade head   # применит 005
 
 # 2. Имя узла — добавить ключ server_name в секцию openvpn:
 #    файла config/openvpn.yaml (НЕ в обёртках хуков, их не трогаем):
@@ -352,6 +381,12 @@ sudo venv/bin/alembic -c database/alembic.ini upgrade head   # применит 
 
 # 3. Перезапустить web (единственный долгоживущий процесс со старым кодом)
 sudo systemctl restart openvpn-web
+```
+
+Проверить, что схема доехала (должно напечатать `005 (head)`):
+
+```bash
+sudo venv/bin/python -m alembic -c database/alembic.ini current
 ```
 
 Дальше всё происходит само: первое же подключение клиента (или ближайший
@@ -382,9 +417,11 @@ UI заполнен Server; на карточке пользователя CCD �
 1. Админ-хост: MySQL, `alembic upgrade head` (005), web, таймер
    `--role central`. Проверить, что accounts наполнились из `certs/*.pem` и
    CRL подхватился.
-2. Один пилотный инстанс сайта: конфиг с `server_name`, server.conf
-   (management + хуки), таймер `--role site`. Проверить: сессии в UI с именем
-   сервера; cleanup не трогает чужие сессии; `ccd_status` наполнился.
+2. Один пилотный инстанс сайта: конфиг/env-файл с `server_name`, `ccd_dir` и
+   mgmt-сокетом этого инстанса, server.conf (management + хуки), таймер
+   `--role site`. Проверить: сессии в UI с именем сервера; cleanup не трогает
+   чужие сессии; `ccd_status` наполнился теми CN, что есть в CCD-каталоге
+   именно этого инстанса.
 3. Раскатать остальные инстансы по одному.
 4. Опционально: бэкфилл `server_id` для старых сессий (см. выше).
 
@@ -409,3 +446,12 @@ UI заполнен Server; на карточке пользователя CCD �
   LogServer (central crl_checker), но фактически не блокирует подключение на
   сайте, пока туда не доставлен свежий файл для `crl-verify`. Это дыра provision,
   не LogServer — рекомендуется закрыть в provision (push CRL вместе с CCD).
+- **Справочник пользователей (`accounts`) общий для всех серверов.** Он
+  наполняется `cert_sync`-ом с админ-хоста, то есть рассчитан на общий CA.
+  Сессии и CCD скоупятся по серверу, а пользователи — нет: один и тот же CN на
+  двух серверах считается одним пользователем. Пока CA один (штатная схема
+  provision) это ровно то, что нужно. Если подключать сервер с **собственным**
+  CA, его пользователи в `accounts` не появятся (их сертификаты некому
+  прочитать) — сессии будут писаться в аккаунты, созданные хуками на лету, а
+  совпадение CN с пользователем другого CA сольёт их в одну карточку.
+  Разделение справочника по CA — отдельная доработка, сейчас не поддержано.

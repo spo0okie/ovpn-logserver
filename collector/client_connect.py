@@ -9,7 +9,7 @@
 4. Создает запись session со статусом 'active' (I4.3)
 5. Использует GeoIP модуль для определения геолокации (I4.4)
 6. При любой ошибке возвращает exit 0, не блокируя VPN (I4.5)
-7. Не делает SELECT запросов в БД для создания account (I4.6)
+7. Не изменяет чужие данные (I4.6)
 
 Инварианты:
 - I4.1: Только переменные окружения OpenVPN
@@ -17,7 +17,8 @@
 - I4.3: Статус 'active' при создании сессии
 - I4.4: GeoIP через resolve_geoip()
 - I4.5: exit 0 при любой ошибке
-- I4.6: Только INSERT операции для account
+- I4.6: Не изменяет чужие данные (SELECT'ы есть: поиск account и активных
+  сессий этого же аккаунта для C5.x — см. docs/invariants.md)
 - C5.1: При подключении с активной сессией - старая помечается как orphaned
 - C5.2: Перед созданием сессии проверяется наличие активной
 - C5.3: orphaned сессия закрывается (disconnected_at=NOW())
@@ -37,7 +38,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # при загрузке core.database даёт ненулевой exit → OpenVPN заблокирует клиента).
 # Любой сбой импорта фиксируем и обрабатываем внутри main() с exit 0.
 try:
-    from sqlalchemy import or_
     from sqlalchemy.dialects.mysql import insert
     from core.time import utcfromtimestamp, utcnow
     from core.database import SessionLocal, engine
@@ -45,16 +45,16 @@ try:
     from core.geoip import resolve_geoip
     from core.serial import normalize_serial
     from collector.config import SERVER_NAME
-    from collector.server_registry import resolve_server_id
+    from collector.server_registry import resolve_server_id, session_scope_clause
     _IMPORT_ERROR = None
 except Exception as _import_exc:  # noqa: BLE001 — сознательно ловим всё
     _IMPORT_ERROR = _import_exc
-    or_ = insert = None
+    insert = None
     SessionLocal = engine = None
     Account = Session = Base = None
     resolve_geoip = None
     SERVER_NAME = None
-    resolve_server_id = None
+    resolve_server_id = session_scope_clause = None
 
     def normalize_serial(value):  # заглушка на случай сбоя импорта
         return value
@@ -123,7 +123,8 @@ def get_env_vars():
     """
     cn = os.environ.get('common_name')
     source_ip = os.environ.get('trusted_ip')
-    # tls_serial_0 — hex-строка без префикса; нормализуем к каноническому виду.
+    # tls_serial_0 — decimal (OpenVPN 2.4+); нормализуем к каноническому виду
+    # на случай hex от старых версий.
     serial_number = normalize_serial(os.environ.get('tls_serial_0'))
 
     logger.debug(
@@ -237,27 +238,23 @@ def get_active_sessions_for_account(db, account_id: int, server_id: int = None) 
 
     Мультисайт: скоуп по server_id обязателен — один конфиг может легитимно
     висеть одновременно на двух сайтах, чужие сессии закрывать нельзя.
-    Сессии с server_id IS NULL (legacy до мультисайта) считаются своими:
-    они созданы единственным существовавшим тогда сервером.
+    Правило скоупа — session_scope_clause(): свои + legacy (server_id IS NULL);
+    при неизвестном сервере (server_id=None) — только server_id IS NULL, но
+    никогда «без фильтра».
 
     Аргументы:
         db: сессия базы данных
         account_id: ID аккаунта
-        server_id: ID текущего сервера (None — без скоупа, старое поведение)
+        server_id: ID текущего сервера; None — сервер не определён
 
     Возвращает:
         list: Список активных сессий
     """
-    query = db.query(Session).filter(
+    return db.query(Session).filter(
         Session.account_id == account_id,
-        Session.status == 'active'
-    )
-    if server_id is not None:
-        query = query.filter(
-            or_(Session.server_id == server_id, Session.server_id.is_(None))
-        )
-
-    return query.all()
+        Session.status == 'active',
+        session_scope_clause(server_id),
+    ).all()
 
 
 def close_orphaned_session(db, session: Session):
@@ -327,7 +324,7 @@ def create_session(db, account_id: int, env_vars: dict, geo: dict, server_id: in
         server_id: ID текущего сервера (None — если регистрация не удалась;
                    данные важнее скоупа, сессия пишется с NULL)
 
-    Invariant I4.3, I4.6: Только INSERT, статус 'active'
+    Invariant I4.3: статус 'active' при создании
     """
     # Разбираем тайстамп из time_unix если есть, иначе используем текущее время
     connected_at = utcnow()
@@ -407,7 +404,7 @@ def client_connect(db_session=None):
         else:
             logger.debug("Using provided database session")
 
-        # I4.2: Создаем или находим account без SELECT
+        # I4.2: Создаем или находим account через upsert (не merge())
         # Используем пару (cn, serial_number) для идентификации
         account = create_or_get_account(
             db,
@@ -416,8 +413,9 @@ def client_connect(db_session=None):
         )
 
         # Мультисайт: регистрируем/находим ЭТОТ инстанс по имени из конфига.
-        # Сбой регистрации не блокирует запись сессии (I4.5): данные важнее
-        # скоупа, сессия уйдёт с server_id=NULL.
+        # Сбой регистрации не блокирует запись сессии (I4.5): она уйдёт с
+        # server_id=NULL, а закрытие orphaned ограничится строками с NULL —
+        # сессии других сайтов не трогаются (session_scope_clause).
         server_id = None
         try:
             server_id = resolve_server_id(db, SERVER_NAME)

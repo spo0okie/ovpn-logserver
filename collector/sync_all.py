@@ -200,17 +200,33 @@ def run_sync(role: str = "all"):
                 print(f"Error closing database session: {e}", file=sys.stderr)
 
 
+SYNC_ROLES = ("all", "central", "site")
+
+
 def main(argv=None):
-    """Точка входа для запуска синхронизации."""
+    """Точка входа для запуска синхронизации.
+
+    Роль: флаг --role, иначе ENV SYNC_ROLE, иначе "all". ENV нужен, чтобы на
+    админ-хосте переключить штатный openvpn-sync.service на central одной
+    строкой в systemd drop-in (Environment=SYNC_ROLE=central), не переписывая
+    ExecStart и не угадывая путь к интерпретатору.
+    """
     parser = argparse.ArgumentParser(description="Периодическая синхронизация LogServer")
     parser.add_argument(
         "--role",
-        choices=("all", "central", "site"),
-        default="all",
+        choices=SYNC_ROLES,
+        default=os.getenv("SYNC_ROLE") or "all",
         help="all — single-site (дефолт); central — cert+crl (админ-хост CA); "
-             "site — ccd+cleanup (сервер сайта)",
+             "site — ccd+cleanup (сервер сайта). По умолчанию — ENV SYNC_ROLE",
     )
     args = parser.parse_args(argv)
+    # argparse не проверяет default по choices: опечатка в SYNC_ROLE без этой
+    # проверки молча ушла бы в run_sync. Падаем громко — systemd увидит сбой.
+    if args.role not in SYNC_ROLES:
+        parser.error(
+            f"недопустимая роль {args.role!r} (ENV SYNC_ROLE); "
+            f"ожидается одна из: {', '.join(SYNC_ROLES)}"
+        )
 
     try:
         with sync_lock():

@@ -153,6 +153,6 @@ def downgrade() -> None:
     op.drop_table('sessions')
     op.drop_table('accounts')
 
-    # Удаляем ENUM типы (для MySQL)
-    op.execute("DROP TYPE IF EXISTS session_status")
-    op.execute("DROP TYPE IF EXISTS failure_type")
+    # Отдельных ENUM-типов в MySQL нет (ENUM — свойство колонки, уходит вместе
+    # с таблицей). Прежний DROP TYPE — синтаксис PostgreSQL, на MySQL он давал
+    # синтаксическую ошибку и ломал `alembic downgrade base`.

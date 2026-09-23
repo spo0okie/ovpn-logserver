@@ -16,8 +16,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import or_  # noqa: E402
+
 from core.time import utcnow  # noqa: E402
-from core.models import VpnServer  # noqa: E402
+from core.models import Session, VpnServer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -63,3 +65,21 @@ def resolve_server_id(db, name: str, create: bool = True):
 
     logger.info("VPN server registered: id=%s, name='%s'", server.id, name)
     return server.id
+
+
+def session_scope_clause(server_id):
+    """
+    Условие «сессии, которые этот инстанс вправе закрывать» (C5.x, I5.1).
+
+    - server_id известен: свои сессии + legacy (server_id IS NULL, созданы до
+      мультисайта единственным тогда сервером);
+    - server_id неизвестен (регистрация/поиск сервера не удались): ТОЛЬКО
+      сессии с server_id IS NULL — туда же хук запишет и новую сессию.
+
+    Второй случай принципиален: «нет сервера — нет фильтра» закрывал бы
+    active-сессии того же CN на ВСЕХ сайтах. Хук остаётся fail-open для VPN
+    и записи, но fail-closed по отношению к чужим сайтам.
+    """
+    if server_id is None:
+        return Session.server_id.is_(None)
+    return or_(Session.server_id == server_id, Session.server_id.is_(None))

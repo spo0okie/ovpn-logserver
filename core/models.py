@@ -1,7 +1,9 @@
 """
 SQLAlchemy модели для OpenVPN LogServer.
 
-Модели точно соответствуют схеме БД из миграции 001_initial_schema.py.
+Модели соответствуют схеме БД из миграций (канон — database/migrations,
+сейчас ревизия 005). Типы упрощены ради SQLite, индексы и server_default
+объявлены только в миграциях — см. docs/database.md.
 """
 
 from datetime import datetime
@@ -80,13 +82,13 @@ class VpnServer(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utcnow,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False
     )
 
@@ -308,6 +310,8 @@ class Session(Base):
         bytes_received: Получено байт
         virtual_ip: Виртуальный IP в VPN
         status: Статус сессии (active/closed/error)
+        server_id: Сервер сессии (NULL — legacy до мультисайта)
+        server: Связанный VpnServer
         account: Связанный аккаунт
     """
     
@@ -321,7 +325,7 @@ class Session(Base):
     )
     account_id: Mapped[int] = mapped_column(
         get_int_type(unsigned=True),  # INT UNSIGNED
-        ForeignKey("accounts.id", ondelete="CASCADE"),  # I1.3: ON DELETE CASCADE
+        ForeignKey("accounts.id", ondelete="CASCADE"),  # I1.2: ON DELETE CASCADE
         nullable=False
     )
     # NULL — legacy-строки, созданные до мультисайта; они принадлежат
@@ -446,13 +450,13 @@ class CcdStatus(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=utcnow,
         nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False
     )
 

@@ -7,5 +7,5 @@ auth:
     # Имя пользователя для Basic Auth.
     username: admin
     # bcrypt-хеш пароля. Сгенерировать:
-    #   python -c "from passlib.hash import bcrypt; print(bcrypt.hash('your_password'))"
+    #   python3 -c "import bcrypt; print(bcrypt.hashpw(b'your_password', bcrypt.gensalt()).decode())"
     password_hash: "$2b$12$REPLACE_ME_WITH_BCRYPT_HASH"

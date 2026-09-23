@@ -19,17 +19,31 @@ OpenVPN ──(script-hooks)──> collector ──> MySQL <── web (FastAPI
     Читают переменные окружения OpenVPN, пишут в БД.
   - **Периодический синк** `sync_all.py` (systemd timer `openvpn-sync.timer`)
     выполняет по порядку `cert_sync` → `crl_checker` → `ccd_checker` →
-    `session_cleanup`. Порядок важен (инвариант S3.2).
+    `session_cleanup`. Порядок важен (инвариант S3.2). Роль запуска —
+    `--role all|central|site` или ENV `SYNC_ROLE` (см. «Мультисайт» ниже).
   - `mgmt_client.py` — чтение management-сокета OpenVPN (список живых клиентов
     для обнаружения orphaned-сессий).
+  - `server_registry.py` — регистрация инстанса в `vpn_servers` и правило
+    скоупа сессий по серверу.
 - **`core/`** — общий код: `models.py` (SQLAlchemy), `database.py`, `config.py`,
-  `geoip.py`, `serial.py`.
-- **`web/`** — FastAPI: `api/{accounts,sessions,stats}.py` под `/api/v1`,
-  `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
+  `time.py` (naive-UTC), `geoip.py`, `serial.py`.
+- **`web/`** — FastAPI: `api/{accounts,sessions,stats,servers}.py` под `/api/v1`,
+  `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`, `dependencies.py`,
+  `utils/timezone.py`.
 - **`database/`** — Alembic (`migrations/`) и `init.sql` для ручного bootstrap.
 
 **Границы**: collector пишет, web API читает, БД — единственное хранилище
 состояния. Список инвариантов — [invariants.md](invariants.md).
+
+## Мультисайт
+
+Тот же набор компонентов разносится по ролям хостов: на админ-хосте с CA —
+MySQL, web и синк роли `central` (`cert_sync` + `crl_checker`, потому что
+сертификаты и CRL есть только там); на каждом инстансе OpenVPN — хуки и синк
+роли `site` (`ccd_checker` + `session_cleanup`, потому что CCD и
+management-сокет локальны). Сессии привязаны к серверу (`sessions.server_id`),
+наличие CCD — к паре (CN, сервер) в `ccd_status`, имя инстанса приходит из
+`OPENVPN_SERVER_NAME`. Развёртывание и ограничения — [multisite.md](multisite.md).
 
 ## Почему хуки, а не разбор логов
 
@@ -62,6 +76,8 @@ Management-сокет используется только для чтения 
 ## Конфигурация
 
 `core/config.py` — единая точка: YAML из `config/*.yaml` плюс ENV-override поверх.
+Исключение — настройки самого web (`app.debug`, `cors.*`): их `web/main.py`
+читает из `config/web.yaml` напрямую, у `debug` ENV-переопределения нет.
 `DATABASE_URL` перекрывает подключение целиком. Файлы конфигурации **не
 обязательны**: если все значения заданы через ENV, приложение работает без них
 (так устроен Docker-стенд). При отсутствии обязательных значений — падение с
@@ -86,6 +102,6 @@ web-контейнер уходил в crash-loop с «Table already exists».
 ## Тесты
 
 Юнит- и интеграционные тесты идут на SQLite, прод — MySQL. Это значит, что
-расхождения по UNSIGNED/ENUM/FK локально не ловятся; единственная проверка на
-настоящем MySQL — Docker-стенд. Модели намеренно используют обычный `Integer`
+расхождения по UNSIGNED/ENUM/FK в них не ловятся; на настоящем MySQL работают
+`database/tests` (тесты схемы) и Docker-стенд. Модели намеренно используют обычный `Integer`
 вместо UNSIGNED ради совместимости с SQLite.

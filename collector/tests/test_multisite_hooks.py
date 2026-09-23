@@ -185,8 +185,12 @@ class TestDisconnectServerScope:
         assert check.get(Session, own_id).status == 'closed'
         assert check.get(Session, foreign_id).status == 'active'
 
-    def test_disconnect_unknown_server_falls_back_unscoped(self, make_db, mocker):
-        """Сервер не зарегистрирован (create=False) — поведение как раньше."""
+    def test_disconnect_unknown_server_closes_only_null_scope(self, make_db, mocker):
+        """
+        Сервер не зарегистрирован (create=False): закрывается сессия с
+        server_id IS NULL — её записал connect, не сумевший зарегистрировать
+        сервер. Новых записей disconnect не создаёт (I5.6).
+        """
         db = make_db()
         account = Account(cn='roaming_user', serial_number='123456')
         db.add(account)
@@ -206,3 +210,57 @@ class TestDisconnectServerScope:
         assert check.get(Session, legacy_id).status == 'closed'
         # disconnect ничего не создаёт (I5.6): сервер так и не зарегистрирован
         assert check.query(VpnServer).filter_by(name='never-connected').count() == 0
+
+
+class TestUnknownServerNeverUnscoped:
+    """
+    Регрессия: при неизвестном собственном сервере хуки раньше работали БЕЗ
+    фильтра и закрывали active-сессии того же CN на всех сайтах.
+    """
+
+    def test_connect_registration_failure_keeps_other_sites(self, make_db, mock_geoip, mocker):
+        """Регистрация сервера упала (напр. нет INSERT на vpn_servers): чужой сайт цел."""
+        db = make_db()
+        sid_b = resolve_server_id(db, 'site-b')
+        account = Account(cn='roaming_user', serial_number='123456')
+        db.add(account)
+        db.commit()
+        foreign = Session(
+            account_id=account.id, server_id=sid_b,
+            connected_at=utcnow(), source_ip='198.51.100.1', status='active',
+        )
+        db.add(foreign)
+        db.commit()
+        foreign_id = foreign.id
+
+        mocker.patch('collector.client_connect.SERVER_NAME', 'site-a')
+        mocker.patch('collector.client_connect.resolve_server_id',
+                     side_effect=RuntimeError('INSERT denied'))
+        assert _run_hook(client_connect, CONNECT_ENV, make_db()) == 0
+
+        check = make_db()
+        assert check.get(Session, foreign_id).status == 'active'
+        # запись о подключении не потеряна — ушла без сервера
+        new = check.query(Session).filter(Session.server_id.is_(None)).one()
+        assert new.status == 'active'
+
+    def test_disconnect_unknown_server_keeps_other_sites(self, make_db, mocker):
+        """Свой сервер не найден: сессия того же CN на другом сайте не закрывается."""
+        db = make_db()
+        sid_b = resolve_server_id(db, 'site-b')
+        account = Account(cn='roaming_user', serial_number='123456')
+        db.add(account)
+        db.commit()
+        foreign = Session(
+            account_id=account.id, server_id=sid_b,
+            connected_at=utcnow(), source_ip='2.2.2.2', status='active',
+        )
+        db.add(foreign)
+        db.commit()
+        foreign_id = foreign.id
+
+        mocker.patch('collector.client_disconnect.SERVER_NAME', 'never-connected')
+        assert _run_hook(client_disconnect, DISCONNECT_ENV, make_db()) == 0
+
+        check = make_db()
+        assert check.get(Session, foreign_id).status == 'active'

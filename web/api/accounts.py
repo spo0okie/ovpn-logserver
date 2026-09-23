@@ -2,7 +2,7 @@
 API endpoints для работы с аккаунтами.
 
 I7.1: Только SELECT запросы к БД
-I7.2: Ответы соответствуют формату из api-design.md
+I7.2: Ответы соответствуют контракту из docs/api.md
 I7.3: Пагинация работает корректно
 I7.4: Фильтры работают как указано в спецификации
 I7.5: При отсутствии данных возвращается 404 или пустой список
@@ -251,13 +251,17 @@ def get_account(
     # Получаем последнюю сессию по любому из account_id
     account_ids = [a.id for a in accounts]
     last_session = None
-    latest_session = db.query(SessionModel).filter(
+    latest = db.query(SessionModel, VpnServer.name).outerjoin(
+        VpnServer, SessionModel.server_id == VpnServer.id
+    ).filter(
         SessionModel.account_id.in_(account_ids)
     ).order_by(SessionModel.connected_at.desc()).first()
 
-    if latest_session:
+    if latest:
+        latest_session, latest_server_name = latest
         last_session = {
             "id": latest_session.id,
+            "server_name": latest_server_name,
             "status": latest_session.status,
             "connected_at": latest_session.connected_at,
             "disconnected_at": latest_session.disconnected_at,

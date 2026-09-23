@@ -1,0 +1,11 @@
+[Unit]
+Description=OpenVPN LogServer site sync timer (%i)
+Documentation=https://github.com/spo0okie/ovpn-logserver/blob/master/docs/multisite.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

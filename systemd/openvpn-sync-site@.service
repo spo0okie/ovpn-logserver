@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenVPN LogServer site sync (%i)
+Documentation=https://github.com/spo0okie/ovpn-logserver/blob/master/docs/multisite.md
+# MySQL на сайте удалённый (админ-хост) — ждём сеть, а не mysql.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/openvpn-logserver
+# Всё инстанс-специфичное — имя, CCD-каталог, mgmt-сокет, lock-файл — в
+# env-файле, имя файла = имя инстанса (%i). Образец: systemd/site.env.example
+EnvironmentFile=/etc/openvpn-logserver/%i.env
+ExecStart=/opt/openvpn-logserver/venv/bin/python /opt/openvpn-logserver/collector/sync_all.py --role site

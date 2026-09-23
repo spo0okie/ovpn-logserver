@@ -1,364 +1,105 @@
-# Конфигурация OpenVPN LogServer
+# Конфигурация
 
-Централизованная конфигурация для всех компонентов системы OpenVPN LogServer.
-Все настройки хранятся в YML файлах в папке `config/`.
+Единая точка загрузки — `core/config.py`: YAML из этого каталога плюс
+переопределение переменными окружения поверх. **ENV всегда приоритетнее YAML.**
+Все YAML-файлы необязательны: любой набор значений можно задать только через
+ENV. Захардкоженных паролей нет — при отсутствии обязательного значения
+приложение падает с `ConfigError`, например `Database config: 'password' is empty`.
 
-## Структура
+Файлы создаются из образцов `*.yaml.example` и в git не коммитятся. Комментарии
+в образцах — основная справка по ключам; ниже только сводка и то, чего в
+образцах нет.
 
-```
-config/
-├── database.yaml    # Конфигурация базы данных
-├── auth.yaml        # Учетные данные (пароли в открытом виде)
-├── openvpn.yaml     # Конфигурация путей OpenVPN
-└── web.yaml         # Конфигурация web-приложения
-```
+`core/config.py` читает **только** этот каталог (`<проект>/config`).
+Отдельный `/etc/openvpn-logserver/config` приложение не увидит.
 
-## Файлы конфигурации
+## database.yaml — подключение к MySQL
 
-### database.yaml
+| Ключ | ENV | Дефолт |
+|---|---|---|
+| `host` | `DB_HOST` | — (обязателен, если не задан `unix_socket`) |
+| `port` | `DB_PORT` | 3306 |
+| `name`, `user`, `password` | `DB_NAME`, `DB_USER`, `DB_PASSWORD` | — (обязательны) |
+| `unix_socket` | `DB_UNIX_SOCKET` | — |
+| `pool_size`, `max_overflow` | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | 10, 20 |
+| `pool_timeout`, `pool_recycle` | `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE` | 30, 3600 |
+| `charset` | `DB_CHARSET` | utf8mb4 |
 
-Централизованный файл конфигурации базы данных для всех компонентов системы.
+`DATABASE_URL` в ENV перекрывает подключение целиком (`mysql+pymysql://...`).
+Подстановки вида `${VAR}` внутри YAML нет — строка попадёт в конфиг буквально.
 
-```yaml
-# Конфигурация базы данных OpenVPN LogServer
-database:
-  # Параметры подключения к MySQL
-  host: localhost
-  port: 3306
-  name: openvpn_logs
-  user: openvpn_user
-  password: СМЕНИТЕ_ПАРОЛЬ_БД      # Пароль в открытом виде
+## auth.yaml — вход в веб-интерфейс
 
-  # Параметры пула соединений
-  pool_size: 10
-  max_overflow: 20
-  pool_timeout: 30
-  pool_recycle: 3600
+| Ключ (`auth.web.*`) | ENV |
+|---|---|
+| `username` | `WEB_AUTH_USERNAME` |
+| `password_hash` — bcrypt, рекомендуется | `WEB_AUTH_PASSWORD_HASH` |
+| `password` — открытым текстом, legacy (пишет предупреждение в лог) | `WEB_AUTH_PASSWORD` |
 
-  # Дополнительные параметры подключения
-  charset: utf8mb4
-```
-
-#### Параметры database.yaml
-
-| Параметр | Тип | Описание | Значение по умолчанию |
-|----------|-----|----------|----------------------|
-| `host` | string | Хост MySQL сервера | `localhost` |
-| `port` | int | Порт MySQL | `3306` |
-| `name` | string | Имя базы данных | `openvpn_logs` |
-| `user` | string | Пользователь БД | `openvpn_user` |
-| `password` | string | Пароль БД (в открытом виде) | - |
-| `pool_size` | int | Размер пула соединений | `10` |
-| `max_overflow` | int | Максимальное превышение пула | `20` |
-| `pool_timeout` | int | Таймаут получения соединения (сек) | `30` |
-| `pool_recycle` | int | Время пересоздания соединения (сек) | `3600` |
-| `charset` | string | Кодировка соединения | `utf8mb4` |
-
-### auth.yaml
-
-Конфигурация аутентификации для Web UI и API.
-
-```yaml
-# Конфигурация аутентификации OpenVPN LogServer
-auth:
-  web:
-    username: admin
-    password: СМЕНИТЕ_ПАРОЛЬ        # Пароль в открытом виде (legacy; лучше password_hash)
-```
-
-#### Параметры auth.yaml
-
-| Параметр | Тип | Описание | Значение по умолчанию |
-|----------|-----|----------|----------------------|
-| `web.username` | string | Имя пользователя для Basic Auth | `admin` |
-| `web.password` | string | Пароль в открытом виде | - |
-
-### openvpn.yaml
-
-Конфигурация путей к файлам и директориям OpenVPN для collector модулей.
-
-```yaml
-# Конфигурация OpenVPN для collector модулей
-openvpn:
-  # Базовая директория OpenVPN
-  base_dir: /etc/openvpn
-
-  # Директория с сертификатами клиентов
-  certs_dir: /etc/openvpn/certs
-
-  # Расширение файлов сертификатов
-  cert_extension: .crt
-
-  # Путь к CRL файлу (Certificate Revocation List)
-  crl_file: /etc/openvpn/crl.pem
-
-  # Директория с CCD (Client Config Directory) файлами
-  ccd_dir: /etc/openvpn/ccd
-```
-
-#### Параметры openvpn.yaml
-
-| Параметр | Тип | Описание | Значение по умолчанию |
-|----------|-----|----------|----------------------|
-| `base_dir` | string | Базовая директория OpenVPN | `/etc/openvpn` |
-| `certs_dir` | string | Директория с сертификатами клиентов | `/etc/openvpn/certs` |
-| `cert_extension` | string | Расширение файлов сертификатов | `.crt` |
-| `crl_file` | string | Путь к CRL файлу | `/etc/openvpn/crl.pem` |
-| `ccd_dir` | string | Директория с CCD файлами | `/etc/openvpn/ccd` |
-
-#### Приоритет настроек
-
-Приоритет (от высшего к низшему):
-1. **Переменные окружения** — для Docker и временного переопределения
-2. **config/openvpn.yaml** — основная конфигурация
-3. **Значения по умолчанию**
-
-Переменные окружения:
-- `OPENVPN_DIR` — базовая директория
-- `CERTS_DIR` — директория с сертификатами
-- `CERT_EXTENSION` — расширение файлов сертификатов
-- `CRL_FILE` — путь к CRL файлу
-- `CCD_DIR` — директория с CCD файлами
-
-### web.yaml
-
-Конфигурация web-приложения. **Важно:** учетные данные (пароли) хранятся в отдельном файле [`config/auth.yaml`](auth.yaml).
-
-```yaml
-# Конфигурация Web приложения OpenVPN LogServer
-
-# Настройки приложения
-app:
-  # Хост для прослушивания (127.0.0.1 для локального доступа, 0.0.0.0 для всех интерфейсов)
-  host: 127.0.0.1
-
-  # Порт
-  port: 8000
-
-  # Количество worker-процессов
-  workers: 2
-
-  # Секретный ключ для сессий (измените на случайную строку!)
-  secret_key: "change-this-to-random-secret-key-min-32-chars"
-
-  # Режим отладки (не включайте в production!)
-  debug: false
-
-# Настройки логирования
-logging:
-  # Уровень логирования: DEBUG, INFO, WARNING, ERROR
-  level: INFO
-
-  # Путь к файлу логов
-  file: /opt/openvpn-logserver/logs/web.log
-
-  # Максимальный размер файла лога в байтах
-  max_bytes: 10485760  # 10 MB
-
-  # Количество резервных копий логов
-  backup_count: 5
-
-# Настройки пагинации
-pagination:
-  # Количество элементов на странице по умолчанию
-  default_page_size: 25
-
-  # Максимальное количество элементов на странице
-  max_page_size: 100
-
-# Настройки CORS (для API доступа из других доменов)
-cors:
-  # Разрешенные источники (список или ["*"] для всех)
-  allow_origins: ["*"]
-
-  # Разрешенные методы
-  allow_methods: ["GET", "POST"]
-
-  # Разрешенные заголовки
-  allow_headers: ["*"]
-```
-
-## Примеры конфигурации
-
-### Минимальная конфигурация (production)
-
-**config/database.yaml:**
-```yaml
-database:
-  host: localhost
-  port: 3306
-  name: openvpn_logs
-  user: openvpn_user
-  password: your_secure_password_here
-  pool_size: 10
-  max_overflow: 20
-```
-
-**config/auth.yaml:**
-```yaml
-auth:
-  web:
-    username: admin
-    password: your_admin_password_here
-```
-
-**config/web.yaml:**
-```yaml
-app:
-  host: 127.0.0.1
-  port: 8000
-  workers: 2
-  secret_key: "your-very-secret-key-here-min-32-chars"
-
-logging:
-  level: INFO
-  file: /opt/openvpn-logserver/logs/web.log
-```
-
-### Конфигурация для Docker
-
-**config/database.yaml:**
-```yaml
-database:
-  host: mysql  # Имя сервиса в docker-compose
-  port: 3306
-  name: openvpn_logs
-  user: openvpn
-  password: docker_password_here
-  pool_size: 10
-  max_overflow: 20
-```
-
-**config/auth.yaml:**
-```yaml
-auth:
-  web:
-    username: admin
-    password: docker_admin_password
-```
-
-**config/web.yaml:**
-```yaml
-app:
-  host: 0.0.0.0  # Слушаем на всех интерфейсах
-  port: 8000
-  workers: 2
-  secret_key: "docker-secret-key-change-in-production"
-
-logging:
-  level: INFO
-  file: /opt/openvpn-logserver/logs/web.log
-```
-
-### Конфигурация с удаленной БД
-
-**config/database.yaml:**
-```yaml
-database:
-  host: db.example.com
-  port: 3306
-  name: openvpn_logs
-  user: openvpn_user
-  password: remote_password_here
-  pool_size: 20
-  max_overflow: 30
-  pool_timeout: 60
-  pool_recycle: 1800
-  charset: utf8mb4
-```
-
-## Права доступа
-
-Рекомендуемые права доступа к файлам конфигурации:
+Если заданы оба, решает хеш. Сгенерировать хеш:
 
 ```bash
-# Владелец - пользователь приложения
-sudo chown -R ovpn-logserver:ovpn-logserver /opt/openvpn-logserver/config
-
-# Только владелец может читать (содержит пароли в открытом виде)
-sudo chmod 640 /opt/openvpn-logserver/config/*.yaml
-
-# Директория недоступна для других
-sudo chmod 750 /opt/openvpn-logserver/config
+python3 -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"
 ```
 
-## Использование в коде
+## openvpn.yaml — что читает collector
 
-### Python API
+| Ключ (`openvpn.*`) | ENV | Дефолт | Кому нужен |
+|---|---|---|---|
+| `certs_dir` | `OPENVPN_CERTS_DIR` | `/etc/openvpn/certs` | `cert_sync` (роли all/central) |
+| `cert_extension` | `OPENVPN_CERT_EXTENSION` | `.crt` | `cert_sync` |
+| `crl_file` | `OPENVPN_CRL_FILE` | `/etc/openvpn/crl.pem` | `crl_checker` (роли all/central) |
+| `ccd_dir` | `OPENVPN_CCD_DIR` | `/etc/openvpn/ccd` | `ccd_checker` (роли all/site) |
+| `management_socket` | `OPENVPN_MGMT_SOCKET` | `/var/run/openvpn/mgmt.sock` | `session_cleanup` (роли all/site) |
+| `server_name` | `OPENVPN_SERVER_NAME` | `local` | хуки и синк роли all/site |
 
-```python
-from core.config import load_db_config, get_database_url, get_web_auth_credentials
+- Роли синка и какой хост какими ключами пользуется — [docs/multisite.md](../docs/multisite.md).
+- `base_dir` (`OPENVPN_BASE_DIR`) на пути не влияет: у каждого пути свой явный
+  дефолт.
+- Устаревшие ENV-алиасы `CERTS_DIR`, `CRL_FILE`, `CCD_DIR`, `CERT_EXTENSION`
+  всё ещё читаются collector'ом и **перекрывают** одноимённые `OPENVPN_*`.
+  Если в окружении остался старый `CCD_DIR`, новый `OPENVPN_CCD_DIR` не
+  подействует. `OPENVPN_DIR` на пути фактически не влияет.
+- Пути должны совпадать с server.conf и раскладкой PKI. Например, provision
+  кладёт сертификаты как `certs/*.pem` (имя файла = серийник): при дефолтном
+  `cert_extension: .crt` `cert_sync` не найдёт ни одного.
 
-# Загрузить конфигурацию БД
-config = load_db_config()
-print(config['host'])  # localhost
-print(config['port'])  # 3306
+## web.yaml — только веб-приложение
 
-# Получить URL для SQLAlchemy
-url = get_database_url()
-# mysql+pymysql://openvpn_user:password@localhost:3306/openvpn_logs
+Читается напрямую из `web/main.py`, в обход `core/config.py`. Используются
+только два блока:
 
-# Получить учетные данные для аутентификации
-auth = get_web_auth_credentials()
-print(auth['username'])  # admin
-print(auth['password'])  # значение из config/auth.yaml
-```
+- `app.debug` — `true` открывает `/docs`, `/redoc`, `/openapi.json`. В проде —
+  `false`. ENV-переопределения нет.
+- `cors.allow_origins` / `allow_methods` / `allow_headers`. ENV
+  `CORS_ALLOW_ORIGINS` (через запятую) перекрывает список origins. Значение
+  `["*"]` вместе с credentials небезопасно — CORS тогда отключается целиком.
 
-### Кэширование
+Хост, порт и число воркеров задаются в командной строке uvicorn (systemd-юнит
+`openvpn-web.service`), а не здесь.
 
-Конфигурация кэшируется для повторного использования. Для принудительной перезагрузки:
+## Прочие ENV вне YAML
 
-```python
-from core.config import reload_config
+| ENV | Кто читает | Назначение |
+|---|---|---|
+| `SESSION_COOKIE_SECURE` | web | `true` — cookie сессии только по HTTPS (за reverse proxy с TLS) |
+| `SYNC_ROLE` | `collector/sync_all.py` | роль синка `all`/`central`/`site`; флаг `--role` приоритетнее |
+| `SYNC_LOCK_PATH` | `collector/sync_all.py` | lock-файл синка, дефолт `/var/run/openvpn-logserver/sync.lock`; на хосте с двумя инстансами — свой у каждого |
+| `OPENVPN_LOGSERVER_PATH` | обёртки хуков | путь к проекту, дефолт `/opt/openvpn-logserver`; хукам передаётся `setenv` в server.conf |
 
-# Перезагрузить конфигурацию
-config = reload_config()
-```
+## Права на файлы
 
-## Проверка конфигурации
+`database.yaml` содержит пароль, но его должны читать **все** процессы,
+которые ходят в БД: web, синк и хуки. Хуки выполняются от пользователя
+процесса OpenVPN; при `user nobody` в server.conf это `nobody`. Если закрыть
+файл правами `600`/`640` на чужого владельца, хук не прочитает конфиг: VPN
+продолжит работать (fail-open), но сессии перестанут записываться молча.
+Ошибку видно в `client-connect.log`. Давайте права на чтение группе, в которую
+входят пользователь OpenVPN и пользователь сервисов.
 
-```bash
-# Проверить что файл существует и валиден
-python3 -c "
-from core.config import load_db_config, get_database_url, get_database_url_safe
-config = load_db_config()
-print('Config loaded successfully:')
-print(f'  Host: {config[\"host\"]}')
-print(f'  Port: {config[\"port\"]}')
-print(f'  Database: {config[\"name\"]}')
-print(f'  User: {config[\"user\"]}')
-print(f'  URL: {get_database_url_safe()}')
-"
-```
+## В коде и тестах
 
-## Решение проблем
-
-### Ошибка: "Configuration file not found"
-
-**Причина:** Файл `config/database.yaml` не найден.
-
-**Решение:**
-```bash
-# Проверить наличие файла
-ls -la config/database.yaml
-
-# Создать если отсутствует
-cp config/database.yaml.example config/database.yaml
-```
-
-### Ошибка: "Invalid configuration: 'database' section not found"
-
-**Причина:** В YAML файле отсутствует секция `database`.
-
-**Решение:** Проверить структуру файла:
-```yaml
-database:
-  host: localhost
-  # ... остальные параметры
-```
-
-## Ссылки
-
-- [Развёртывание и systemd](../docs/deployment.md)
-- [Архитектура и конфигурация](../docs/architecture.md)
-- [Документация по миграциям](../database/README.md)
+Конфигурация кешируется (`lru_cache`). После смены ENV в тестах —
+`core.config.reload_config()` (возвращает `None`, конфиг перечитывается при
+следующем обращении). Порядок в conftest: сначала выставить ENV, затем
+импортировать `web.main`/`core.database` — иначе закешируется реальный конфиг.

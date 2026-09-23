@@ -37,9 +37,15 @@ def normalize_serial(value: Optional[Union[int, str]]) -> str:
     if text.startswith("legacy_"):
         return text
 
-    # Удаляем разделители-двоеточия (hex с разделителями: AA:BB:CC).
+    # Двоеточия бывают только у hex (AA:BB:CC) — парсим как hex безусловно.
+    # Иначе hex из одних цифр (01:23:45) после удаления разделителей прошёл
+    # бы проверку isdigit() ниже и ошибочно сохранился как decimal "012345".
     if ":" in text:
         text = text.replace(":", "")
+        try:
+            return str(int(text, 16))
+        except ValueError:
+            return text.upper()
 
     if text.lower().startswith("0x"):
         try:

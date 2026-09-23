@@ -1,12 +1,29 @@
 # Развертывание и Systemd сервисы
 
+Этот документ описывает **single-site**: web, MySQL и сборщик на одном хосте с
+OpenVPN. Для нескольких OpenVPN-серверов с центральным CA — [multisite.md](multisite.md);
+разделы ниже там переиспользуются по ролям хостов:
+
+| Хост | Что из этого документа | Отличия в мультисайте |
+|---|---|---|
+| админ-хост (CA) | MySQL, миграции, web, `openvpn-sync.service` | синк в роли `central` (`SYNC_ROLE=central`); разделы про OpenVPN не нужны |
+| сервер сайта | подключение хуков к OpenVPN | web и MySQL не ставятся; синк — шаблонный `openvpn-sync-site@.service` |
+
+⚠️ На админ-хосте штатный `openvpn-sync.service` без переопределения роли
+запускает `all`: ccd_checker и session_cleanup отработают вхолостую и
+зарегистрируют в `vpn_servers` фантомный сервер `local`. Как задать роль —
+[multisite.md](multisite.md#админ-хост-ca).
+
+Обновление существующей установки на версию с мультисайтом (миграция 005,
+`server_name`) — [multisite.md](multisite.md#миграция-существующей-single-site-установки).
+
 ## Быстрый старт для root
 
 Минимальная установка для работы под пользователем root.
 
 ### Требования
 - Debian/Ubuntu
-- Python 3.9+
+- Python 3.10+
 - MySQL 8.0+
 
 ### Установка
@@ -46,6 +63,7 @@ cd database && alembic upgrade head && cd ..
 cp config/database.yaml.example config/database.yaml
 cp config/auth.yaml.example     config/auth.yaml
 cp config/web.yaml.example      config/web.yaml
+cp config/openvpn.yaml.example  config/openvpn.yaml
 
 # Создание директории для логов
 mkdir -p /opt/openvpn-logserver/logs
@@ -55,58 +73,25 @@ mkdir -p /opt/openvpn-logserver/logs
 
 Скрипты `client-connect` и `client-disconnect` фиксируют подключения в БД.
 
-#### 2.1 Создание wrapper-скриптов
+#### 2.1 Обёртки хуков
 
-Вместо прямого копирования Python-файлов создаём wrapper-скрипты, которые:
-- Устанавливают правильный `PYTHONPATH`
-- Вызывают функции из оригинальных модулей
+OpenVPN вызывает не сами `collector/client_connect.py`/`client_disconnect.py`,
+а обёртки из `collector/openvpn_scripts/`: они добавляют проект в `sys.path` и
+перехватывают **любой** сбой импорта с exit 0. Без этого ошибка конфига или
+недостающая зависимость дадут ненулевой код, и OpenVPN откажет клиенту в
+подключении (инвариант I4.5). Поэтому обёртки копируются из репозитория, а не
+пишутся вручную.
 
 ```bash
-# Создаем директорию для скриптов
 mkdir -p /etc/openvpn/scripts
-
-# Создаем wrapper для client-connect
-cat > /etc/openvpn/scripts/client-connect <<'EOF'
-#!/usr/bin/env python3
-"""
-Wrapper для client-connect скрипта OpenVPN.
-Вызывается при подключении клиента.
-"""
-import sys
-import os
-
-# Добавляем путь к проекту для импорта модулей
-sys.path.insert(0, '/opt/openvpn-logserver')
-
-from collector.client_connect import main
-
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-# Создаем wrapper для client-disconnect
-cat > /etc/openvpn/scripts/client-disconnect <<'EOF'
-#!/usr/bin/env python3
-"""
-Wrapper для client-disconnect скрипта OpenVPN.
-Вызывается при отключении клиента.
-"""
-import sys
-import os
-
-# Добавляем путь к проекту для импорта модулей
-sys.path.insert(0, '/opt/openvpn-logserver')
-
-from collector.client_disconnect import main
-
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-# Права на выполнение
-chmod +x /etc/openvpn/scripts/client-connect
-chmod +x /etc/openvpn/scripts/client-disconnect
+cp collector/openvpn_scripts/client-connect collector/openvpn_scripts/client-disconnect /etc/openvpn/scripts/
+chmod 755 /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
 ```
+
+Путь к проекту обёртки берут из ENV `OPENVPN_LOGSERVER_PATH` (по умолчанию
+`/opt/openvpn-logserver`). Шебанг — `#!/usr/bin/env python3`, то есть системный
+Python: подходит для этой установки, где зависимости ставились глобально. Для
+установки с venv шебанг меняется — см. шаг 6 раздела с изоляцией.
 
 #### 2.2 Настройка OpenVPN
 
@@ -131,6 +116,13 @@ management /run/openvpn/mgmt.sock unix
 
 Полный список требований к server.conf — [openvpn-setup.md](openvpn-setup.md).
 
+Хуки выполняются от пользователя процесса OpenVPN. Если в server.conf есть
+сброс привилегий (`user nobody`), этому пользователю нужно право читать
+`config/database.yaml` — иначе хук не подключится к БД: VPN продолжит работать
+(fail-open), но сессии молча перестанут записываться. Ошибка будет видна в
+`client-connect.log` (каталог `/var/log/openvpn-logserver/`, а если его нет —
+`logs/` в каталоге проекта).
+
 Перезапустите OpenVPN:
 ```bash
 systemctl restart openvpn@server
@@ -151,6 +143,16 @@ journalctl -u openvpn@server -f
 
 Отредактируйте `config/database.yaml` в каталоге проекта:
 - `password` — пароль для подключения к БД
+
+Отредактируйте `config/openvpn.yaml` — откуда синк читает данные и как
+называется этот сервер:
+- `certs_dir` + `cert_extension` — выпущенные сертификаты (у provision:
+  `/etc/openvpn/certs`, расширение `.pem`, имя файла = серийник);
+- `crl_file` — CRL (у provision: `/etc/openvpn/clients/revoked.crl`);
+- `ccd_dir` и `management_socket` — должны совпадать с `client-config-dir` и
+  `management` в server.conf;
+- `server_name` — имя сервера в журнале сессий (любое осмысленное, дефолт
+  `local`).
 
 Отредактируйте `config/auth.yaml`:
 - `username` и `password_hash` (bcrypt) для доступа к Web UI.
@@ -214,6 +216,7 @@ curl -u admin:СМЕНИТЕ_ПАРОЛЬ_АДМИНА http://localhost:8000/api
 ├── config/                      # Конфигурационные файлы
 │   ├── database.yaml            # Конфигурация БД
 │   ├── auth.yaml                # Учетные данные
+│   ├── openvpn.yaml             # Пути PKI/CCD, mgmt-сокет, имя сервера
 │   └── web.yaml                 # Конфигурация web-приложения
 ├── logs/                        # Логи приложения
 └── systemd/                     # Unit файлы (копируются в /etc/systemd/system/)
@@ -324,55 +327,18 @@ auth:
     password: СМЕНИТЕ_ПАРОЛЬ_АДМИНА  # Пароль в открытом виде
 EOF
 
-# Создать конфигурацию web приложения
+# Пути PKI/CCD, mgmt-сокет и имя сервера: скопировать образец и
+# отредактировать — ключи описаны в «3. Настройка конфигурации»
+sudo cp /opt/openvpn-logserver/config/openvpn.yaml.example /opt/openvpn-logserver/config/openvpn.yaml
+
+# Конфигурация web-приложения. Код читает только app.debug и cors.*
+# (web/main.py); хост, порт и число воркеров задаются в openvpn-web.service
 sudo tee /opt/openvpn-logserver/config/web.yaml <<EOF
-# Конфигурация Web приложения OpenVPN LogServer
-
-# Настройки базы данных
-# URL подключения формируется автоматически из database.yaml
-database:
-  # Пул соединений
-  pool_size: 10
-  max_overflow: 20
-
-# Настройки приложения
 app:
-  # Хост для прослушивания (127.0.0.1 для локального доступа, 0.0.0.0 для всех интерфейсов)
-  host: 127.0.0.1
+  debug: false        # true открывает /docs и /openapi.json — не для прода
 
-  # Порт
-  port: 8000
-
-  # Количество worker-процессов
-  workers: 2
-
-  # Секретный ключ для сессий (измените на случайную строку!)
-  secret_key: "change-this-to-random-secret-key-min-32-chars"
-
-  # Режим отладки (не включайте в production!)
-  debug: false
-
-# Настройки логирования
-logging:
-  # Уровень логирования: DEBUG, INFO, WARNING, ERROR
-  level: INFO
-
-  # Путь к файлу логов
-  file: /opt/openvpn-logserver/logs/web.log
-
-  # Максимальный размер файла лога в байтах
-  max_bytes: 10485760  # 10 MB
-
-  # Количество резервных копий логов
-  backup_count: 5
-
-# Настройки пагинации
-pagination:
-  # Количество элементов на странице по умолчанию
-  default_page_size: 25
-
-  # Максимальное количество элементов на странице
-  max_page_size: 100
+cors:
+  allow_origins: []   # ["*"] вместе с credentials небезопасен — CORS отключится
 EOF
 
 # Установить права на конфиги
@@ -387,69 +353,46 @@ sudo chown ovpn-logserver:ovpn-logserver /opt/openvpn-logserver/config/*.yaml
 cd database && alembic upgrade head && cd ..
 ```
 
-#### 6. Настройка OpenVPN скриптов
+#### 6. Подключение обёрток хуков
+
+Обёртки копируются из репозитория (почему не вручную — см. «2.1 Обёртки
+хуков»). Зависимости в этой установке стоят в venv, поэтому шебанг
+переключается на его интерпретатор:
 
 ```bash
-# Создать директорию для скриптов OpenVPN
 sudo mkdir -p /etc/openvpn/scripts
-
-# Скопировать скрипты client-connect и client-disconnect
-sudo tee /etc/openvpn/scripts/client-connect <<'EOF'
-#!/opt/openvpn-logserver/venv/bin/python
-"""
-Скрипт client-connect для OpenVPN.
-Вызывается при подключении клиента.
-"""
-import os
-import sys
-
-# Добавляем путь к проекту
-sys.path.insert(0, '/opt/openvpn-logserver')
-
-from collector.client_connect import main
-
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-sudo tee /etc/openvpn/scripts/client-disconnect <<'EOF'
-#!/opt/openvpn-logserver/venv/bin/python
-"""
-Скрипт client-disconnect для OpenVPN.
-Вызывается при отключении клиента.
-"""
-import os
-import sys
-
-# Добавляем путь к проекту
-sys.path.insert(0, '/opt/openvpn-logserver')
-
-from collector.client_disconnect import main
-
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-# Установить права на скрипты
-sudo chmod 755 /etc/openvpn/scripts/client-connect
-sudo chmod 755 /etc/openvpn/scripts/client-disconnect
-sudo chown root:ovpn-logserver /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
+sudo cp collector/openvpn_scripts/client-connect collector/openvpn_scripts/client-disconnect /etc/openvpn/scripts/
+sudo sed -i '1s|.*|#!/opt/openvpn-logserver/venv/bin/python|' /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
+sudo chmod 755 /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
 ```
+
+Хуки выполняются от пользователя процесса OpenVPN, а конфиги здесь закрыты
+правами `640 ovpn-logserver` (шаг 4). Если OpenVPN работает от root — всё в
+порядке. Если в server.conf есть `user nobody`, хук не прочитает
+`config/database.yaml`, и сессии молча перестанут записываться (VPN продолжит
+работать — fail-open). Тогда добавьте пользователя OpenVPN в группу
+`ovpn-logserver` или ослабьте права на `database.yaml`.
 
 #### 7. Настройка OpenVPN
 
 Добавьте в конфигурацию OpenVPN (`/etc/openvpn/server.conf`):
 
 ```conf
-# Скрипты подключения/отключения
+# Без script-security 2 хуки не исполняются — сессии молча не пишутся
+script-security 2
+
 client-connect /etc/openvpn/scripts/client-connect
 client-disconnect /etc/openvpn/scripts/client-disconnect
 
-# Логирование
-log-append /var/log/openvpn/server.log
-verb 3
-status /var/log/openvpn/status.log
+# Нужен session_cleanup для обнаружения оборванных сессий
+management /run/openvpn/mgmt.sock unix
 ```
+
+Путь сокета должен совпадать с `management_socket` в `config/openvpn.yaml`, а
+пользователь синка (`ovpn-logserver`) — иметь право к нему подключаться.
+Иначе session_cleanup по fail-closed-правилу (C1.7) будет на каждом запуске
+пропускать очистку — это видно в `session-cleanup.log`. Полный список
+требований — [openvpn-setup.md](openvpn-setup.md).
 
 Перезапустите OpenVPN:
 ```bash
@@ -467,7 +410,7 @@ Web приложение.
 sudo tee /etc/systemd/system/openvpn-web.service <<'EOF'
 [Unit]
 Description=OpenVPN LogServer Web Interface
-Documentation=https://github.com/yourorg/openvpn-logserver
+Documentation=https://github.com/spo0okie/ovpn-logserver
 After=network.target mysql.service
 Wants=mysql.service
 
@@ -504,14 +447,17 @@ EOF
 
 ### 2. openvpn-sync.timer + openvpn-sync.service
 
-Периодические задачи синхронизации (сертификаты, CRL, CCD).
+Периодическая синхронизация — `collector/sync_all.py`: сертификаты, CRL, CCD и
+закрытие оборванных сессий, строго в этом порядке и с защитой от параллельного
+запуска. Вызывать функции синка из юнита по отдельности нельзя: так теряются
+`session_cleanup`, lock и правило «очистка только после успешного синка» (S3.2).
 
 ```bash
 # Timer
 sudo tee /etc/systemd/system/openvpn-sync.timer <<'EOF'
 [Unit]
 Description=OpenVPN Data Sync Timer
-Documentation=https://github.com/yourorg/openvpn-logserver
+Documentation=https://github.com/spo0okie/ovpn-logserver
 
 [Timer]
 OnBootSec=1min
@@ -526,7 +472,7 @@ EOF
 sudo tee /etc/systemd/system/openvpn-sync.service <<'EOF'
 [Unit]
 Description=OpenVPN Data Sync
-Documentation=https://github.com/yourorg/openvpn-logserver
+Documentation=https://github.com/spo0okie/ovpn-logserver
 After=mysql.service
 
 [Service]
@@ -535,23 +481,11 @@ User=ovpn-logserver
 Group=ovpn-logserver
 WorkingDirectory=/opt/openvpn-logserver
 
-Environment=PYTHONPATH=/opt/openvpn-logserver
+# Роль синка: all — single-site. На админ-хосте мультисайта — central
+# (см. docs/multisite.md)
+Environment=SYNC_ROLE=all
 
-ExecStart=/opt/openvpn-logserver/venv/bin/python -c "
-import sys
-sys.path.insert(0, '/opt/openvpn-logserver')
-from collector.cert_sync import sync_certificates
-from collector.crl_checker import check_crl
-from collector.ccd_checker import check_ccd
-from core.database import SessionLocal
-db = SessionLocal()
-try:
-    sync_certificates(db)
-    check_crl(db)
-    check_ccd(db)
-finally:
-    db.close()
-"
+ExecStart=/opt/openvpn-logserver/venv/bin/python /opt/openvpn-logserver/collector/sync_all.py
 
 # Security hardening
 NoNewPrivileges=true
@@ -559,6 +493,12 @@ ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/opt/openvpn-logserver/config
 ReadOnlyPaths=/etc/openvpn
+# При ProtectSystem=strict файловая система read-only. Без этих двух строк не
+# создадутся lock-файл (/run/openvpn-logserver) и логи синка
+# (/var/log/openvpn-logserver): синк шёл бы без блокировки и писал только в
+# журнал systemd
+RuntimeDirectory=openvpn-logserver
+LogsDirectory=openvpn-logserver
 EOF
 ```
 
@@ -702,7 +642,7 @@ cd /opt/openvpn-logserver
 sudo systemctl stop openvpn-web openvpn-sync.timer
 
 # Update code
-sudo -u ovpn-logserver git pull origin main
+sudo -u ovpn-logserver git pull
 
 # Update dependencies
 source venv/bin/activate
@@ -720,11 +660,19 @@ sudo systemctl start openvpn-web openvpn-sync.timer
 sudo systemctl status openvpn-web
 ```
 
+При переходе на версию с мультисайтом (миграция 005) после обновления нужно
+задать `server_name` и при желании перенести старые сессии на этот сервер —
+[multisite.md](multisite.md#миграция-существующей-single-site-установки).
+
 ## Порядок развертывания (кратко)
 
-1. **Установить зависимости** - Python, MySQL, Git
-2. **Подключить скрипты к OpenVPN** - скопировать `client-connect` и `client-disconnect`, настроить `server.conf`
-3. **Создать файл `config/database.yaml`** - настройки БД с паролем в открытом виде
-4. **Создать файл `config/auth.yaml`** - учетные данные для доступа
-5. **Применить миграции** - `cd database && alembic upgrade head`
-6. **Запустить компоненты** - Web UI и systemd таймеры
+1. **Установить зависимости** — Python, MySQL, Git
+2. **Создать `config/*.yaml`** — `database.yaml` (подключение к БД), `auth.yaml`
+   (учётные данные UI), `openvpn.yaml` (пути PKI/CCD, mgmt-сокет, `server_name`)
+3. **Применить миграции** — `cd database && alembic upgrade head`
+4. **Подключить хуки к OpenVPN** — скопировать обёртки из
+   `collector/openvpn_scripts/`; в server.conf — `script-security 2`,
+   `client-connect`, `client-disconnect`, `management`
+5. **Запустить компоненты** — web и таймер синхронизации
+
+Мультисайт — тот же набор, разнесённый по ролям хостов: [multisite.md](multisite.md).

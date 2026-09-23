@@ -1,22 +1,37 @@
-# Конфигурация OpenVPN для collector модулей.
-# Скопируйте в openvpn.yaml и при необходимости поправьте пути.
-# Переопределяется ENV: OPENVPN_BASE_DIR, OPENVPN_CERTS_DIR, OPENVPN_CERT_EXTENSION,
-#                       OPENVPN_CRL_FILE, OPENVPN_CCD_DIR, OPENVPN_MGMT_SOCKET,
-#                       OPENVPN_SERVER_NAME
+# Конфигурация collector: откуда читать PKI/CCD и как называется этот сервер.
+# Скопируйте в openvpn.yaml. Любой ключ перекрывается ENV (приоритет у ENV):
+#   OPENVPN_CERTS_DIR, OPENVPN_CERT_EXTENSION, OPENVPN_CRL_FILE,
+#   OPENVPN_CCD_DIR, OPENVPN_MGMT_SOCKET, OPENVPN_SERVER_NAME
+# Справка по ключам — config/README.md.
 
 openvpn:
-  base_dir: /etc/openvpn
+  # --- Нужны синку ролей all/central (cert_sync, crl_checker) ---
   certs_dir: /etc/openvpn/certs
-  cert_extension: .crt
+  cert_extension: .crt          # cert_sync берёт только файлы с этим расширением
   crl_file: /etc/openvpn/crl.pem
-  ccd_dir: /etc/openvpn/ccd
-  management_socket: /var/run/openvpn/mgmt.sock
-  # Имя ЭТОГО инстанса OpenVPN (мультисайт, docs/multisite.md): chl, msk-2fa, ...
-  # Для single-site можно оставить дефолт. У 2FA-инстанса — своё имя.
-  server_name: local
 
-# Пример для сервера сайта в мультисайте (provision/multisite):
-#   cert_extension: .pem              # админ-хост кладёт certs/*.pem
+  # --- Нужны хукам и синку ролей all/site (ccd_checker, session_cleanup) ---
+  ccd_dir: /etc/openvpn/ccd                     # = client-config-dir в server.conf
+  management_socket: /var/run/openvpn/mgmt.sock # = management <путь> unix
+  server_name: local            # имя этого инстанса в журнале; single-site — любое
+
+# -----------------------------------------------------------------------------
+# Раскладка provision (github.com/spo0okie/ovpn), single-site на одном хосте:
+#   certs_dir: /etc/openvpn/certs
+#   cert_extension: .pem                  # certs/*.pem, имя файла = серийник
+#   crl_file: /etc/openvpn/clients/revoked.crl
+#   ccd_dir: /etc/openvpn/ccd
+#
+# Мультисайт (docs/multisite.md) — у каждого хоста только свои ключи:
+#
+# Админ-хост CA, синк роли central:
+#   certs_dir: /etc/openvpn/certs
+#   cert_extension: .pem
 #   crl_file: /etc/openvpn/crl/crl.pem
-#   ccd_dir: /etc/openvpn/mobile/ccd  # remoteCcdDir из provision
-#   server_name: chl                  # код сайта (+ "-2fa" для 2FA-инстанса)
+#
+# Сервер сайта, роль site. Один инстанс — можно здесь; несколько инстансов на
+# хосте — через env-файлы инстансов (systemd/site.env.example), тогда эти
+# ключи здесь не заполняются:
+#   ccd_dir: /etc/openvpn/mobile/ccd      # remoteCcdDir из provision
+#   management_socket: /run/openvpn/mgmt-chl.sock
+#   server_name: chl

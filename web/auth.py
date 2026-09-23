@@ -167,9 +167,14 @@ _warned_plaintext_password = False
 def _verify_password(provided: str, stored_hash: Optional[str], stored_plain: Optional[str]) -> bool:
     """Сравнивает пароль с bcrypt-хешем (приоритет) или plaintext (legacy)."""
     if stored_hash:
+        # bcrypt напрямую, без passlib: passlib 1.7.4 (последний релиз, 2020)
+        # несовместим с bcrypt>=4.1 — самотест бэкенда хеширует пароль длиннее
+        # 72 байт, bcrypt 5.x на это бросает ValueError, и verify() падал на
+        # ЛЮБОМ пароле. Вход по password_hash не работал вовсе.
+        # ValueError здесь — битый хеш в конфиге или пароль > 72 байт: отказ.
         try:
-            from passlib.hash import bcrypt
-            return bcrypt.verify(provided, stored_hash)
+            import bcrypt
+            return bcrypt.checkpw(provided.encode("utf-8"), stored_hash.encode("utf-8"))
         except (ValueError, TypeError):
             return False
 

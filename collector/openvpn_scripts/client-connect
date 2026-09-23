@@ -9,10 +9,11 @@ Wrapper для client-connect скрипта OpenVPN.
     chmod +x /etc/openvpn/scripts/client-connect
 
 Настройка OpenVPN (/etc/openvpn/server.conf):
+    script-security 2
     client-connect /etc/openvpn/scripts/client-connect
-    setenv-safe common_name
-    setenv-safe trusted_ip
-    setenv-safe ifconfig_pool_remote_ip
+
+Переменные клиента OpenVPN передаёт сам — setenv-safe не нужен (он добавляет
+префикс OPENVPN_ к имени). Подробности: collector/openvpn_scripts/README.md
 """
 import sys
 import os

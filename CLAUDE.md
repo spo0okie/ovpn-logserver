@@ -12,7 +12,10 @@ OpenVPN LogServer — пассивный мониторинг OpenVPN-серве
 
 ```bash
 # Юнит-тесты по модулям (SQLite, Docker не нужен)
-pytest collector/tests web/tests core/tests database/tests
+pytest collector/tests web/tests core/tests
+
+# Тесты схемы — живой MySQL (TEST_DB_*, а для alembic-подпроцесса ещё DATABASE_URL)
+pytest database/tests
 
 # Интеграционные (SQLite, симуляция VPN-подключений через прямые вызовы hook-функций)
 pytest tests/integration
@@ -43,10 +46,11 @@ alembic -c database/alembic.ini revision -m "описание"
 
 - **`collector/`** — запись данных. Два пути:
   - **Script-hooks** `client_connect.py` / `client_disconnect.py` — вызываются самим OpenVPN на каждое (от)подключение через `client-connect`/`client-disconnect` в server.conf. Читают переменные окружения OpenVPN, пишут в БД.
-  - **Периодическая синхронизация** `sync_all.py` (systemd timer `openvpn-sync.timer`) — запускает по порядку: `cert_sync` → `crl_checker` → `ccd_checker` → `session_cleanup`. Порядок важен: cleanup идёт только после успешной синхронизации. Мультисайт: `--role central` (cert+crl, админ-хост CA) / `--role site` (ccd+cleanup, сервер сайта); дефолт `all` — single-site.
+  - **Периодическая синхронизация** `sync_all.py` (systemd timer `openvpn-sync.timer`) — запускает по порядку: `cert_sync` → `crl_checker` → `ccd_checker` → `session_cleanup`. Порядок важен: cleanup идёт только после успешной синхронизации. Мультисайт: `--role central` (cert+crl, админ-хост CA) / `--role site` (ccd+cleanup, сервер сайта); без флага роль берётся из ENV `SYNC_ROLE`, иначе `all` — single-site.
   - `mgmt_client.py` — чтение management-сокета OpenVPN (список живых клиентов для orphan-detection).
-- **`core/`** — `models.py` (SQLAlchemy: Account, Session, VpnServer, CcdStatus, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
-- **`web/`** — FastAPI: `api/{accounts,sessions,stats}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
+  - `server_registry.py` — регистрация инстанса в `vpn_servers` по имени и единое правило скоупа сессий по серверу (`session_scope_clause`).
+- **`core/`** — `models.py` (SQLAlchemy: Account, Session, VpnServer, CcdStatus, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `time.py` (naive-UTC), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
+- **`web/`** — FastAPI: `api/{accounts,sessions,stats,servers}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
 - **`database/`** — Alembic (`alembic.ini`, `migrations/`) и `init.sql`.
 
 ## Конфигурация
@@ -58,12 +62,11 @@ alembic -c database/alembic.ini revision -m "описание"
 - **Hooks не ломают VPN**: `client_connect.py`/`client_disconnect.py` при ЛЮБОЙ ошибке возвращают exit 0. Ненулевой exit из client-connect заблокирует подключение клиента.
 - **Серийные номера сертификатов** — всегда через `core.serial.normalize_serial()` (канон — decimal-строка). OpenVPN отдаёт decimal, cryptography — int, старые данные — вперемешку; прямое сравнение без нормализации даёт дубли accounts.
 - **Схема БД имеет несколько источников правды**: миграции Alembic (канон), `database/init.sql` и `core/models.py`. Любое изменение схемы — согласованно во всех местах. `docker/mysql/init.sql` таблиц НЕ создаёт (только `ALTER DATABASE`) — иначе конфликт с `alembic upgrade head` и crash-loop web-контейнера.
-- **Мультисайт-скоупинг по серверу**: `session_cleanup`, C5.x в `client_connect` и I5.1 в `client_disconnect` работают строго в пределах `sessions.server_id` (имя инстанса — `openvpn.server_name`/ENV `OPENVPN_SERVER_NAME`; `server_id IS NULL` = legacy, считается своим). Убрать скоуп — значит массово пометить `error` живые сессии чужих сайтов. Контекст: `docs/multisite.md`.
-- **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. E2E в Docker — единственная проверка на реальном MySQL.
+- **Мультисайт-скоупинг по серверу**: `session_cleanup`, C5.x в `client_connect` и I5.1 в `client_disconnect` работают строго в пределах `sessions.server_id` (имя инстанса — `openvpn.server_name`/ENV `OPENVPN_SERVER_NAME`; `server_id IS NULL` = legacy, считается своим). Правило — одно, `collector/server_registry.session_scope_clause()`: если свой сервер не определён, хуки сужают скоуп до `server_id IS NULL`, но **никогда** не работают без фильтра. Убрать скоуп — значит массово пометить `error` или закрыть живые сессии чужих сайтов. Контекст: `docs/multisite.md`.
+- **Тесты на SQLite, прод на MySQL**: `client_connect` использует MySQL-специфичный `INSERT ... ON DUPLICATE KEY UPDATE`; SQLite-тесты не ловят UNSIGNED/ENUM/FK-расхождения. Проверки на реальном MySQL — `database/tests` и E2E в Docker.
 - **Время**: канон хранения — naive UTC, получать только через `core.time.utcnow()` / `utcfromtimestamp()` (не `datetime.utcnow()` — он устарел, и не `datetime.now(timezone.utc)` — aware-время при сравнении с БД даёт `TypeError`). Исключение: `web/auth.py` (файловые сессии, aware, БД не касается). Отображение — через `web/utils/timezone.py`. Контекст: `docs/timezone.md`.
 - **Прямой вызов функций API из UI-роутов**: FastAPI не применяет `Query(...)` — незаданные аргументы приходят объектами `Query`, а не значениями по умолчанию, и попадают в SQL. Передавать все параметры явно (см. `web/routes/pages.py`).
-- **Переводы строк**: исполняемые файлы (`collector/openvpn_scripts/*`, `docker/**/entrypoint.sh`) обязаны быть в LF. При CRLF шебанг превращается в `#!/usr/bin/env python3`, интерпретатор не находится, хук возвращает ненулевой код и OpenVPN отказывает клиентам. Защита — `.gitattributes` с `* text=auto eol=lf`; при записи файлов из Python указывать `newline='
-'`.
+- **Переводы строк**: исполняемые файлы (`collector/openvpn_scripts/*`, `docker/**/entrypoint.sh`) обязаны быть в LF. При CRLF шебанг превращается в `#!/usr/bin/env python3\r`, интерпретатор не находится, хук возвращает ненулевой код и OpenVPN отказывает клиентам. Защита — `.gitattributes` с `* text=auto eol=lf`; при записи файлов из Python указывать `newline='\n'`.
 - **Паттерн тестовых conftest**: `DATABASE_URL` и auth-ENV выставляются ДО импорта `web.main`/`core.database`, затем `reload_config()` — иначе закешируется реальный конфиг.
 
 ## Документация

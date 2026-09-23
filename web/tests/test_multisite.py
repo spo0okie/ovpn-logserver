@@ -107,3 +107,13 @@ class TestAccountCcdSites:
         resp = client.get(f"/api/v1/accounts/{sample_account.cn}", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["ccd_sites"] == []
+
+
+class TestLastSessionServer:
+
+    def test_last_session_has_server_name(self, client, auth_headers, sessions_on_servers, sample_account):
+        """server_name есть в last_session, как во всех остальных ответах сессий."""
+        resp = client.get(f"/api/v1/accounts/{sample_account.cn}", headers=auth_headers)
+        assert resp.status_code == 200
+        # последняя по connected_at — сессия на site-b (1 час назад)
+        assert resp.json()["last_session"]["server_name"] == "site-b"

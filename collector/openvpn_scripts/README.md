@@ -1,99 +1,74 @@
-# Wrapper-скрипты для OpenVPN
+# Обёртки хуков OpenVPN
 
-Эта директория содержит wrapper-скрипты для интеграции с OpenVPN.
+`client-connect` и `client-disconnect` — то, что OpenVPN вызывает на каждое
+подключение и отключение клиента. Сами хуки — `collector/client_connect.py` и
+`collector/client_disconnect.py`; обёртки делают две вещи:
 
-## Проблема
+1. добавляют проект в `sys.path` — путь из ENV `OPENVPN_LOGSERVER_PATH`, по
+   умолчанию `/opt/openvpn-logserver`. Без этого `import core` из
+   `/etc/openvpn/scripts/` не находится;
+2. перехватывают **любой** сбой импорта и выполнения и выходят с кодом 0
+   (инвариант I4.5). Ненулевой код из `client-connect` заставляет OpenVPN
+   отказать клиенту в подключении. Ошибка конфига, недоступная БД или
+   недостающая зависимость должны стоить потерянной записи в журнале, а не
+   VPN.
 
-Оригинальные скрипты `client_connect.py` и `client_disconnect.py` используют относительные импорты модуля `core`:
-
-```python
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-```
-
-При копировании скриптов в `/etc/openvpn/scripts/` этот путь указывает на `/etc/openvpn`, а не на `/opt/openvpn-logserver`, что приводит к ошибке:
-
-```
-ModuleNotFoundError: No module named 'core'
-```
-
-## Решение
-
-Wrapper-скрипты устанавливают абсолютный путь к проекту перед импортом модулей:
-
-```python
-sys.path.insert(0, '/opt/openvpn-logserver')
-from collector.client_connect import main
-```
+Поэтому обёртки **копируются из репозитория, а не пишутся вручную**:
+самодельная обёртка без перехвата ошибок превращает любой сбой LogServer в
+отказ VPN.
 
 ## Установка
 
-### Вариант 1: Копирование wrapper-скриптов (рекомендуется)
-
-```bash
-# Создаем директорию для скриптов
-mkdir -p /etc/openvpn/scripts
-
-# Копируем wrapper-скрипты
-cp collector/openvpn_scripts/client-connect /etc/openvpn/scripts/
-cp collector/openvpn_scripts/client-disconnect /etc/openvpn/scripts/
-
-# Устанавливаем права на выполнение
-chmod +x /etc/openvpn/scripts/client-connect
-chmod +x /etc/openvpn/scripts/client-disconnect
-```
-
-### Вариант 2: Создание через heredoc
-
 ```bash
 mkdir -p /etc/openvpn/scripts
-
-cat > /etc/openvpn/scripts/client-connect <<'EOF'
-#!/usr/bin/env python3
-import sys
-sys.path.insert(0, '/opt/openvpn-logserver')
-from collector.client_connect import main
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-cat > /etc/openvpn/scripts/client-disconnect <<'EOF'
-#!/usr/bin/env python3
-import sys
-sys.path.insert(0, '/opt/openvpn-logserver')
-from collector.client_disconnect import main
-if __name__ == '__main__':
-    sys.exit(main())
-EOF
-
-chmod +x /etc/openvpn/scripts/client-connect
-chmod +x /etc/openvpn/scripts/client-disconnect
+cp collector/openvpn_scripts/client-connect collector/openvpn_scripts/client-disconnect /etc/openvpn/scripts/
+chmod 755 /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
 ```
 
-## Настройка OpenVPN
+**Интерпретатор.** Шебанг — `#!/usr/bin/env python3`, системный Python.
+Если зависимости ставились в venv, системный Python их не найдёт: обёртка
+выйдет с 0, VPN будет работать, но данные собираться не будут. В этом случае
+переключите шебанг на venv:
 
-Добавьте в `/etc/openvpn/server.conf`:
+```bash
+sed -i '1s|.*|#!/opt/openvpn-logserver/venv/bin/python|' \
+    /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
+```
 
-```conf
-# Скрипты подключения/отключения
-client-connect /etc/openvpn/scripts/client-connect
+**Переводы строк — только LF.** При CRLF шебанг читается как `python3\r`,
+интерпретатор не находится, скрипт возвращает ненулевой код, и OpenVPN
+отказывает клиентам. В репозитории это обеспечивает `.gitattributes`; при
+копировании с Windows проверяйте: `file client-connect` не должен говорить
+`with CRLF`.
+
+## server.conf
+
+```
+script-security 2
+client-connect    /etc/openvpn/scripts/client-connect
 client-disconnect /etc/openvpn/scripts/client-disconnect
-
-# Переменные окружения для скриптов
-setenv-safe common_name
-setenv-safe trusted_ip
-setenv-safe trusted_port
-setenv-safe ifconfig_pool_remote_ip
-setenv-safe bytes_sent
-setenv-safe bytes_received
-setenv-safe time_duration
 ```
 
-## Нестандартный путь установки
+Без `script-security 2` хуки не исполняются. Переменные клиента
+(`common_name`, `trusted_ip`, `tls_serial_0`, `bytes_*` …) OpenVPN передаёт
+хукам сам — `setenv-safe` для них не нужен и вреден: он добавляет к имени
+префикс `OPENVPN_`, и хук переменную не увидит.
 
-Если проект установлен не в `/opt/openvpn-logserver`, задайте переменную окружения:
+Свои переменные для хуков задаются директивой `setenv` в том же server.conf,
+потому что `export` в shell до процесса OpenVPN под systemd не доходит:
 
-```bash
-export OPENVPN_LOGSERVER_PATH=/path/to/project
+```
+setenv OPENVPN_SERVER_NAME chl                          # имя инстанса (мультисайт)
+setenv OPENVPN_LOGSERVER_PATH /srv/openvpn-logserver    # нестандартный путь проекта
 ```
 
-Или отредактируйте wrapper-скрипты, изменив значение `PROJECT_PATH`.
+Полный список требований к server.conf, в том числе `management` для очистки
+оборванных сессий, — [docs/openvpn-setup.md](../../docs/openvpn-setup.md);
+мультисайт — [docs/multisite.md](../../docs/multisite.md).
+
+## Права
+
+Хуки выполняются от пользователя процесса OpenVPN, при `user nobody` в
+server.conf — от `nobody`. Этому пользователю нужно право читать
+`config/database.yaml`. Иначе подключение к БД не состоится и сессии молча
+перестанут записываться — ошибка будет только в `client-connect.log`.

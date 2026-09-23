@@ -1,6 +1,6 @@
 [Unit]
 Description=OpenVPN Data Sync Timer
-Documentation=https://github.com/yourorg/openvpn-logserver
+Documentation=https://github.com/spo0okie/ovpn-logserver
 
 [Timer]
 OnBootSec=1min

@@ -2,7 +2,7 @@
 Тесты для проверки инвариантов схемы базы данных.
 
 Этот модуль содержит тесты для проверки:
-- I1.1: Уникальность CN в таблице accounts
+- I1.1: Уникальность пары (cn, serial_number) в таблице accounts
 - I1.2: Каскадное удаление сессий при удалении аккаунта
 - I1.3: Ограничение ENUM для статуса сессий
 - I1.4: NOT NULL для connected_at
@@ -418,11 +418,13 @@ class TestInvariantI15:
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = %s
-            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache')
+            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache',
+                               'vpn_servers', 'ccd_status')
         """, (TEST_DB_CONFIG['database'],))
 
         tables = [row['TABLE_NAME'] for row in cursor.fetchall()]
-        expected_tables = {'accounts', 'sessions', 'geoip_cache'}
+        expected_tables = {'accounts', 'sessions', 'geoip_cache',
+                           'vpn_servers', 'ccd_status'}
         assert set(tables) == expected_tables, f"Missing tables: {expected_tables - set(tables)}"
 
         cursor.close()
@@ -443,7 +445,8 @@ class TestInvariantI15:
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = %s
-            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache')
+            AND TABLE_NAME IN ('accounts', 'sessions', 'geoip_cache',
+                               'vpn_servers', 'ccd_status')
         """, (TEST_DB_CONFIG['database'],))
 
         tables = [row['TABLE_NAME'] for row in cursor.fetchall()]

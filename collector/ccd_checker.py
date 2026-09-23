@@ -263,9 +263,20 @@ def check_ccd(db=None, ccd_dir: str = None, server_id: int = None) -> dict:
         if server_id is None:
             server_id = resolve_server_id(db, SERVER_NAME)
 
-        counters = sync_ccd_status(db, server_id, ccd_files)
-        stats['site_found'] = counters['found']
-        stats['site_removed'] = counters['removed']
+        # Несуществующий каталог — это опечатка в ccd_dir или несмонтированный
+        # путь, а не «у всех клиентов CCD удалён». Без этой проверки checker
+        # стёр бы все строки ccd_status этого сервера. Пустой существующий
+        # каталог при этом — законное «CCD нет ни у кого».
+        if Path(target_ccd_dir).is_dir():
+            counters = sync_ccd_status(db, server_id, ccd_files)
+            stats['site_found'] = counters['found']
+            stats['site_removed'] = counters['removed']
+        else:
+            logger.warning(
+                f"CCD-каталог {target_ccd_dir} не существует — статусы CCD "
+                f"сервера '{SERVER_NAME}' оставлены без изменений. Проверьте "
+                f"ccd_dir / OPENVPN_CCD_DIR (должен совпадать с client-config-dir)"
+            )
 
         # flush, чтобы агрегат ниже видел свежие строки ccd_status
         db.flush()

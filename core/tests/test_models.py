@@ -6,7 +6,7 @@
 - I2.2: Имена таблиц и полей совпадают со схемой БД
 - I2.3: Типы данных в моделях соответствуют SQL типам
 - I2.4: Отношения (relationship) настроены корректно
-- I2.5: Ограничения БД (I1.1-I1.4) работают через ORM
+- I2.5: Ограничения БД (I1.x) работают через ORM
 """
 
 import pytest
@@ -259,7 +259,7 @@ class TestI24Relationships:
 # ============================================================================
 
 class TestI25DatabaseConstraints:
-    """Тесты проверяют, что ограничения БД (I1.1-I1.4) работают через ORM."""
+    """Тесты проверяют, что ограничения БД (I1.x) работают через ORM."""
     
     # --- Тест I1.1: UNIQUE KEY uk_cn_serial (cn, serial_number) ---
 
@@ -333,7 +333,7 @@ class TestI25DatabaseConstraints:
         assert revoked_account.is_active is False
         assert expired_account.is_active is False
     
-    # --- Тест I1.2: NOT NULL ограничения ---
+    # --- Тест NOT NULL ограничений (в т.ч. I1.4: sessions.connected_at) ---
     
     def test_account_cn_not_null(self, db_session: Session):
         """Account.cn не может быть NULL."""
@@ -376,7 +376,7 @@ class TestI25DatabaseConstraints:
     
     
     
-    # --- Тест I1.3: FOREIGN KEY с ON DELETE CASCADE ---
+    # --- Тест I1.2: FOREIGN KEY с ON DELETE CASCADE ---
     
     def test_session_account_id_foreign_key(self, db_session: Session):
         """Session.account_id должен иметь внешний ключ на accounts.id."""
@@ -392,9 +392,6 @@ class TestI25DatabaseConstraints:
             db_session.commit()
         
         db_session.rollback()
-    
-    # --- Тест I1.4: FOREIGN KEY с ON DELETE SET NULL ---
-    
     
 
 

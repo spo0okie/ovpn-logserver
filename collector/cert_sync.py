@@ -4,7 +4,7 @@
 Сканирует директорию с сертификатами и синхронизирует данные с БД:
 1. Создает accounts для всех неотозванных сертификатов (новое поведение)
 2. Обновляет valid_from и valid_to для всех найденных сертификатов
-3. Помечает отозванные сертификаты как is_revoked=True
+3. Пропускает сертификаты, отозванные по CRL (отзыв помечает crl_checker)
 
 Инварианты:
 - I6.1: Обновляет valid_from, valid_to из сертификатов
@@ -347,11 +347,9 @@ def sync_certificates(db=None, certs_dir: str = None, crl_path: str = None) -> d
                 logger.info(f"Skipping revoked certificate: CN='{cert_info['cn']}', serial='{cert_info['serial_number']}'")
                 continue
 
-            # I6.5: Используем INSERT ... ON DUPLICATE KEY UPDATE для MySQL
-            # или INSERT OR REPLACE для SQLite
-            # Это позволяет создавать новые accounts или обновлять существующие
-            # без дополнительных SELECT запросов
-            # Теперь уникальность определяется парой (cn, serial_number)
+            # Upsert через ORM (_upsert_account: select по (cn, serial_number),
+            # затем insert или update). Гонку с client_connect на той же паре
+            # ловит IntegrityError ниже.
 
             # Покоммитная обработка: один конфликтный/гоночный сертификат не
             # должен откатывать весь батч синхронизации (M2). Коммитим каждую

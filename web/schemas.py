@@ -1,7 +1,7 @@
 """
 Pydantic схемы для API.
 
-I7.2: Ответы соответствуют формату из api-design.md
+I7.2: Ответы соответствуют контракту из docs/api.md
 """
 
 from datetime import datetime
@@ -83,6 +83,7 @@ class AccountLastSession(BaseModel):
     """Информация о последней сессии аккаунта."""
 
     id: int
+    server_name: Optional[str] = None  # NULL — legacy-сессии до мультисайта
     status: str
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
@@ -272,21 +273,6 @@ class ConnectionsStatsResponse(BaseModel):
 
     group_by: str
     data: List[ConnectionPeriodStats]
-
-
-class FailureTypeStats(BaseModel):
-    """Статистика по типу ошибки."""
-
-    failure_type: str
-    count: int
-    percentage: float
-
-
-class FailuresStatsResponse(BaseModel):
-    """Ответ статистики ошибок."""
-
-    group_by: str
-    data: List[FailureTypeStats]
 
 
 class GeographyStatsItem(BaseModel):

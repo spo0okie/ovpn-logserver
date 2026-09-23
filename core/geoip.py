@@ -97,11 +97,11 @@ def _get_cached_geoip(db: Session, ip: str) -> Optional[GeoIPCache]:
     if cache_entry is None:
         return None
     
-    # Проверяем, не истек ли срок кэша
+    # Истёкшая запись — промах. НЕ удаляем: _save_to_cache перезапишет её
+    # свежими данными (upsert). Удаление требовало права DELETE, которого нет в
+    # минимальном гранте сайта (docs/multisite.md), и падение commit оставляло
+    # сессию хука в сломанном состоянии — терялась запись о подключении.
     if cache_entry.is_expired():
-        # Удаляем устаревшую запись
-        db.delete(cache_entry)
-        db.commit()
         return None
     
     return cache_entry
@@ -292,7 +292,14 @@ def resolve_geoip(ip: str, db_session: Optional[Session] = None) -> dict:
         return dict(_NULL_GEO)
     
     except Exception as e:
-        # I3.4: Любая ошибка - возвращаем None значения, не падаем
+        # I3.4: Любая ошибка - возвращаем None значения, не падаем.
+        # rollback обязателен: хук передаёт СВОЮ сессию БД и продолжает в ней
+        # работать (закрытие orphaned, создание сессии). Без отката упавшая
+        # транзакция сломала бы все последующие запросы — сессия не записалась бы.
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.error(f"Unexpected error in resolve_geoip for IP {ip}: {e}")
         return {
             'country': None,

@@ -437,7 +437,11 @@ class TestCacheOperations:
         assert result is None
     
     def test_get_cached_geoip_expired(self, db_session: Session):
-        """Истекшая запись удаляется из кэша."""
+        """
+        Истекшая запись — промах, но НЕ удаляется: её перезапишет
+        _save_to_cache. Удаление требовало права DELETE, которого нет в
+        минимальном гранте сайта, и ронял commit в сессии хука.
+        """
         past = utcnow() - timedelta(days=1)
         cache = GeoIPCache(
             ip='4.4.4.4',
@@ -446,16 +450,48 @@ class TestCacheOperations:
         )
         db_session.add(cache)
         db_session.commit()
-        
+
         result = _get_cached_geoip(db_session, '4.4.4.4')
-        
+
         assert result is None
-        
-        # Проверяем что запись удалена
         remaining = db_session.query(GeoIPCache).filter(
             GeoIPCache.ip == '4.4.4.4'
         ).first()
-        assert remaining is None
+        assert remaining is not None
+
+    def test_expired_entry_overwritten_on_resolve(self, db_session: Session, mocker):
+        """Протухшая запись обновляется свежими данными API (upsert, без DELETE)."""
+        past = utcnow() - timedelta(days=1)
+        db_session.add(GeoIPCache(ip='4.4.4.4', country='Old', expires_at=past))
+        db_session.commit()
+        mocker.patch(
+            'core.geoip._fetch_from_api',
+            return_value={'country': 'New', 'country_code': 'NW', 'city': None,
+                          'region': None, 'latitude': None, 'longitude': None, 'isp': None},
+        )
+
+        result = resolve_geoip('4.4.4.4', db_session)
+
+        assert result['country'] == 'New'
+        rows = db_session.query(GeoIPCache).filter(GeoIPCache.ip == '4.4.4.4').all()
+        assert len(rows) == 1
+        assert rows[0].country == 'New'
+        assert rows[0].expires_at > utcnow()
+
+    def test_failure_leaves_session_usable(self, db_session: Session, mocker):
+        """
+        Сбой внутри resolve_geoip не должен ломать переданную сессию БД:
+        хук продолжает в ней работать (закрытие orphaned, создание сессии).
+        """
+        mocker.patch('core.geoip._get_cached_geoip', side_effect=RuntimeError('db down'))
+        rollback = mocker.spy(db_session, 'rollback')
+
+        result = resolve_geoip('4.4.4.4', db_session)
+
+        assert result['country'] is None
+        rollback.assert_called()
+        # сессия пригодна для дальнейших запросов
+        assert db_session.query(GeoIPCache).count() >= 0
     
     def test_save_to_cache_new(self, db_session: Session):
         """Сохранение новой записи в кэш."""

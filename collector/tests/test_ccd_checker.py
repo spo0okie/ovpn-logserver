@@ -531,3 +531,46 @@ class TestMultisiteCcdStatus:
         assert stats['site_removed'] == 1
         assert db.query(CcdStatus).filter_by(server_id=sid).count() == 0
         assert db.query(Account).filter_by(cn='client').one().has_ccd is False
+
+
+class TestMissingCcdDirKeepsStatus:
+    """
+    Несуществующий CCD-каталог — опечатка в ccd_dir/OPENVPN_CCD_DIR или
+    несмонтированный путь. Раньше checker видел «пустой каталог» и стирал все
+    строки ccd_status своего сервера; теперь статусы остаются как были.
+    """
+
+    def test_missing_dir_does_not_wipe_site_rows(self, db, tmp_path):
+        from core.models import CcdStatus
+        from collector.server_registry import resolve_server_id
+
+        create_ccd_file('client', 'a', tmp_path)
+        db.add(Account(cn='client'))
+        db.commit()
+        sid = resolve_server_id(db, 'chl')
+        check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+        assert db.query(CcdStatus).filter_by(server_id=sid).count() == 1
+
+        stats = check_ccd(db, ccd_dir=str(tmp_path / 'typo'), server_id=sid)
+
+        assert stats['errors'] == 0
+        assert stats['site_removed'] == 0
+        assert db.query(CcdStatus).filter_by(server_id=sid).count() == 1
+        assert db.query(Account).filter_by(cn='client').one().has_ccd is True
+
+    def test_empty_existing_dir_still_clears(self, db, tmp_path):
+        """Существующий пустой каталог — законное «CCD нет ни у кого»."""
+        from core.models import CcdStatus
+        from collector.server_registry import resolve_server_id
+
+        path = create_ccd_file('client', 'a', tmp_path)
+        db.add(Account(cn='client'))
+        db.commit()
+        sid = resolve_server_id(db, 'chl')
+        check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+
+        os.remove(path)
+        stats = check_ccd(db, ccd_dir=str(tmp_path), server_id=sid)
+
+        assert stats['site_removed'] == 1
+        assert db.query(CcdStatus).filter_by(server_id=sid).count() == 0

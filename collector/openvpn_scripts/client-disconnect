@@ -9,10 +9,11 @@ Wrapper для client-disconnect скрипта OpenVPN.
     chmod +x /etc/openvpn/scripts/client-disconnect
 
 Настройка OpenVPN (/etc/openvpn/server.conf):
+    script-security 2
     client-disconnect /etc/openvpn/scripts/client-disconnect
-    setenv-safe common_name
-    setenv-safe bytes_sent
-    setenv-safe bytes_received
+
+Переменные клиента OpenVPN передаёт сам — setenv-safe не нужен (он добавляет
+префикс OPENVPN_ к имени). Подробности: collector/openvpn_scripts/README.md
 """
 import sys
 import os
