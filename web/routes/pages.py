@@ -189,11 +189,14 @@ def accounts_list(
         sort_order=sort_order,
         db=db,
     )
+    # Мультисайт: при нескольких серверах колонка CCD показывает разбивку по ним
+    servers = servers_api.list_servers(db=db)
     return templates.TemplateResponse(
         "accounts.html",
         {
             "request": request,
             "accounts": accounts,
+            "servers": servers["data"],
             "search": search,
             "is_revoked": is_revoked,
             "has_ccd": has_ccd,

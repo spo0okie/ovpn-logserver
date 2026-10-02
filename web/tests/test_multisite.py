@@ -108,6 +108,29 @@ class TestAccountCcdSites:
         assert resp.status_code == 200
         assert resp.json()["ccd_sites"] == []
 
+    def test_account_list_ccd_sites(self, client, auth_headers, db, sample_account, two_servers):
+        """В списке аккаунтов CCD разбит по серверам, а не только агрегатом has_ccd."""
+        a, b = two_servers
+        db.add(CcdStatus(cn=sample_account.cn, server_id=b.id,
+                         ccd_updated_at=utcnow()))
+        db.commit()
+
+        resp = client.get("/api/v1/accounts", headers=auth_headers)
+        assert resp.status_code == 200
+        item = next(i for i in resp.json()["data"] if i["cn"] == sample_account.cn)
+        assert item["ccd_sites"] == ["site-b"]
+
+    def test_accounts_page_shows_ccd_per_server(self, client, auth_headers, db, sample_account, two_servers):
+        a, b = two_servers
+        db.add(CcdStatus(cn=sample_account.cn, server_id=a.id,
+                         ccd_updated_at=utcnow()))
+        db.commit()
+
+        resp = client.get("/accounts", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "CCD есть на site-a" in resp.text
+        assert "CCD нет на site-b" in resp.text
+
 
 class TestLastSessionServer:
 

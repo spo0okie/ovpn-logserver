@@ -72,7 +72,8 @@ class AccountListItem(BaseModel):
     cert_count: int  # Общее количество сертификатов
     active_certs: int  # Количество активных сертификатов
     has_active_cert: bool  # Есть ли хотя бы один активный сертификат
-    has_ccd: bool  # Есть ли CCD для этого CN
+    has_ccd: bool  # Агрегат: CCD есть хотя бы на одном сервере
+    ccd_sites: List[str] = []  # Имена серверов, на которых есть CCD (мультисайт)
     created_at: Optional[datetime] = None  # Дата создания первого сертификата
 
     class Config:

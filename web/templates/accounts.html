@@ -25,9 +25,10 @@
             </div>
             <div class="col-md-3">
                 <select class="form-select" name="is_revoked">
-                    <option value="">All Statuses</option>
-                    <option value="false" {% if is_revoked == 'false' %}selected{% endif %}>Active</option>
-                    <option value="true" {% if is_revoked == 'true' %}selected{% endif %}>Revoked</option>
+                    {# is_revoked фильтрует по «есть ли отозванные сертификаты», а не по колонке Certificate #}
+                    <option value="">All Certificates</option>
+                    <option value="false" {% if is_revoked == 'false' %}selected{% endif %}>No revoked certs</option>
+                    <option value="true" {% if is_revoked == 'true' %}selected{% endif %}>Has revoked certs</option>
                 </select>
             </div>
             <div class="col-md-3">
@@ -68,12 +69,12 @@
                                 {% endif %}
                             </a>
                         </th>
-                        <th>Status</th>
+                        <th title="Есть ли у CN хотя бы один неотозванный и неистекший сертификат. CA общий, от сервера не зависит">Certificate</th>
                         <th>
                             {% set sort_ccd = 'asc' if accounts.meta.sort_by != 'has_ccd' or accounts.meta.sort_order == 'desc' else 'desc' %}
                             <a href="/accounts?page=1&per_page={{ accounts.meta.per_page }}&search={{ search or '' }}&is_revoked={{ is_revoked or '' }}&has_ccd={{ has_ccd or '' }}&sort_by=has_ccd&sort_order={{ sort_ccd }}" 
                                class="text-dark text-decoration-none">
-                                CCD
+                                CCD{% if servers | length > 1 %} by server{% endif %}
                                 {% if accounts.meta.sort_by == 'has_ccd' %}
                                     <i class="bi bi-caret-{{ 'up' if accounts.meta.sort_order == 'asc' else 'down' }}-fill"></i>
                                 {% endif %}
@@ -121,13 +122,22 @@
                         </td>
                         <td>
                             {% if account.has_active_cert %}
-                                <span class="badge bg-success">Active</span>
+                                <span class="badge bg-success">Valid</span>
                             {% else %}
-                                <span class="badge badge-revoked">Revoked</span>
+                                <span class="badge badge-revoked">No valid certs</span>
                             {% endif %}
                         </td>
                         <td>
-                            {% if account.has_ccd %}
+                            {% if servers | length > 1 %}
+                                {# Мультисайт: CCD ведётся отдельно на каждом сервере #}
+                                {% for srv in servers %}
+                                    {% if srv.name in account.ccd_sites %}
+                                        <span class="badge bg-info" title="CCD есть на {{ srv.name }}"><i class="bi bi-check"></i> {{ srv.name }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary" title="CCD нет на {{ srv.name }}"><i class="bi bi-x"></i> {{ srv.name }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            {% elif account.has_ccd %}
                                 <span class="badge bg-info"><i class="bi bi-check"></i> Yes</span>
                             {% else %}
                                 <span class="badge bg-secondary"><i class="bi bi-x"></i> No</span>
@@ -154,7 +164,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="text-center text-muted py-4">
+                        <td colspan="7" class="text-center text-muted py-4">
                             <i class="bi bi-inbox fs-1"></i>
                             <p class="mt-2">No accounts found</p>
                         </td>

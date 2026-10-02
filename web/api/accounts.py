@@ -160,6 +160,19 @@ def list_accounts(
 
     total_pages = (total + per_page - 1) // per_page
 
+    # Мультисайт: на каких серверах есть CCD — одним запросом на всю страницу
+    ccd_sites = {}
+    page_cns = [item.cn for item in items]
+    if page_cns:
+        for cn, server_name in (
+            db.query(CcdStatus.cn, VpnServer.name)
+            .join(VpnServer, CcdStatus.server_id == VpnServer.id)
+            .filter(CcdStatus.cn.in_(page_cns))
+            .order_by(VpnServer.name)
+            .all()
+        ):
+            ccd_sites.setdefault(cn, []).append(server_name)
+
     # Формируем ответ с агрегированными данными
     data = []
     for item in items:
@@ -170,6 +183,7 @@ def list_accounts(
             "active_certs": active_certs,
             "has_active_cert": active_certs > 0,
             "has_ccd": bool(item.has_ccd),
+            "ccd_sites": ccd_sites.get(item.cn, []),
             "created_at": item.created_at
         })
 
