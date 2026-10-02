@@ -18,7 +18,7 @@
 
 import os
 from functools import lru_cache
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from urllib.parse import quote, quote_plus
 
 import yaml
@@ -105,35 +105,75 @@ def load_db_config() -> Dict[str, Any]:
     return merged
 
 
+def _auth_user(entry: Dict[str, Any], where: str) -> Dict[str, Optional[str]]:
+    """Нормализует одну учётку: username + password_hash (или legacy password)."""
+    username = entry.get("username")
+    password = entry.get("password")
+    password_hash = entry.get("password_hash")
+    if not username:
+        raise ConfigError(f"Auth config: {where}: username is required")
+    if not password and not password_hash:
+        raise ConfigError(
+            f"Auth config: {where} ('{username}'): either password_hash "
+            "(recommended) or password must be set"
+        )
+    return {
+        "username": str(username),
+        "password": None if password is None else str(password),
+        "password_hash": password_hash,
+    }
+
+
 @lru_cache()
 def load_auth_config() -> Dict[str, Any]:
     """Загружает auth-конфигурацию из YAML и применяет ENV-override.
 
-    Файл auth.yaml не обязателен, если username и password/password_hash
-    заданы через ENV (WEB_AUTH_*). Иначе — ConfigError ниже.
+    Пользователей несколько: список `auth.web.users` (у каждого своя пара
+    логин/пароль) плюс legacy-пара `auth.web.username`/`password_hash` —
+    обычно админ веб-интерфейса. ENV `WEB_AUTH_*` перекрывают именно эту
+    legacy-пару, как и раньше; список через ENV не задаётся. Ролей нет:
+    логсервер только читает данные, любой пользователь видит всё. Отдельные
+    учётки нужны, чтобы внешним системам (инвентаризация ARMS) выдавать свои
+    пароли и отзывать их, не трогая админский.
+
+    Файл auth.yaml не обязателен, если пользователь задан через ENV.
+    Пустой набор пользователей и дубли логинов — ConfigError.
     """
     cfg = _load_yaml("auth.yaml", "auth", required=False)
     web = cfg.get("web", {}) or {}
 
+    users: List[Dict[str, Optional[str]]] = []
+
     username = os.getenv("WEB_AUTH_USERNAME") or web.get("username")
     password = os.getenv("WEB_AUTH_PASSWORD", web.get("password"))
     password_hash = os.getenv("WEB_AUTH_PASSWORD_HASH") or web.get("password_hash")
+    if username or password or password_hash:
+        users.append(_auth_user(
+            {"username": username, "password": password, "password_hash": password_hash},
+            "web",
+        ))
 
-    if not username:
-        raise ConfigError("Auth config: web.username is required")
-    if not password and not password_hash:
+    listed = web.get("users") or []
+    if not isinstance(listed, list):
+        raise ConfigError("Auth config: web.users must be a list")
+    for i, entry in enumerate(listed):
+        if not isinstance(entry, dict):
+            raise ConfigError(f"Auth config: web.users[{i}] must be a mapping")
+        users.append(_auth_user(entry, f"web.users[{i}]"))
+
+    if not users:
         raise ConfigError(
-            "Auth config: either web.password_hash (recommended) "
-            "or web.password must be set"
+            "Auth config: no users — set web.username/password_hash "
+            "or web.users (or WEB_AUTH_* in ENV)"
         )
 
-    return {
-        "web": {
-            "username": username,
-            "password": password,
-            "password_hash": password_hash,
-        }
-    }
+    seen = set()
+    for user in users:
+        if user["username"] in seen:
+            raise ConfigError(f"Auth config: duplicate username '{user['username']}'")
+        seen.add(user["username"])
+
+    return {"web": {"users": users}}
 
 
 @lru_cache()
@@ -224,9 +264,9 @@ def get_engine_kwargs() -> Dict[str, Any]:
     return kwargs
 
 
-def get_web_auth_credentials() -> Dict[str, Optional[str]]:
-    """Возвращает auth-настройки web: username и password/password_hash."""
-    return load_auth_config()["web"]
+def get_web_users() -> List[Dict[str, Optional[str]]]:
+    """Пользователи web/API: [{username, password, password_hash}, ...]."""
+    return load_auth_config()["web"]["users"]
 
 
 def get_openvpn_paths() -> Dict[str, str]:

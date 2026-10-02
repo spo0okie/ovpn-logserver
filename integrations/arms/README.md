@@ -56,8 +56,25 @@ VPN-сети отдельно не помечаются: провайдер пр
    используйте путь внутри контейнера. Нужен только каталог
    `integrations/arms`, остальной логсервер ARMS не нужен.
 
-2. Заведите в логсервере учётку, под которой ARMS будет ходить в API
-   (`config/auth.yaml` / ENV `WEB_AUTH_*`, см. [deployment.md](../../docs/deployment.md)).
+2. Заведите в логсервере отдельного пользователя для ARMS. Добавьте его в
+   список `auth.web.users` в `config/auth.yaml` и перезапустите web
+   (`systemctl restart openvpn-web`):
+
+   ```yaml
+   auth:
+     web:
+       username: admin                   # основной пользователь - как был
+       password_hash: "$2b$12$..."
+       users:
+         - username: arms
+           password_hash: "$2b$12$..."   # bcrypt-хеш пароля для ARMS
+   ```
+
+   Хеш генерируется командой
+   `python3 -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"`.
+   Сам пароль, не хеш, указывается в конфиге интеграции в ARMS (п.3). Чтобы
+   отозвать доступ ARMS, уберите пользователя из списка и перезапустите web.
+   Подробнее — [config/README.md](../../config/README.md#authyaml--вход-в-веб-интерфейс).
    Логсервер должен быть доступен **с сервера ARMS**; браузеру пользователя —
    только если нужна ссылка «Открыть в OpenVPN LogServer».
 
@@ -73,8 +90,8 @@ VPN-сети отдельно не помечаются: провайдер пр
            'openvpn' => [
                'class' => \openvpnlogserver\arms\OpenVpnProvider::class,
                'url' => 'http://vpnlog.local:8000',   // адрес API, достижимый С СЕРВЕРА ARMS
-               'user' => '...',                       // учётка логсервера из п.2
-               'password' => '...',
+               'user' => 'arms',                      // пользователь логсервера из п.2
+               'password' => '...',                   // его пароль (не хеш)
                // префикс имени IP-записи => server_name инстанса логсервера
                // (null - любой инстанс). По умолчанию - соглашение provision
                // для одиночного инстанса:

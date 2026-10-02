@@ -5,7 +5,8 @@
 - Session ID из cookie (для веб-интерфейса).
 - Authorization Basic из заголовка (для AJAX/curl).
 
-Пароль хранится в config/auth.yaml как bcrypt-хеш (`password_hash`).
+Пользователей несколько (config/auth.yaml: `auth.web.users` плюс legacy-пара
+`auth.web.username`), пароль каждого — bcrypt-хеш (`password_hash`).
 Plaintext-поле `password` поддерживается как legacy с deprecation warning.
 """
 
@@ -20,7 +21,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request, status
 
-from core.config import get_web_auth_credentials
+from core.config import get_web_users
 
 logger = logging.getLogger(__name__)
 
@@ -193,10 +194,16 @@ def _verify_password(provided: str, stored_hash: Optional[str], stored_plain: Op
 
 def verify_credentials(username: str, password: str) -> bool:
     """Проверяет username/password по конфигу. Используется login и Basic Auth."""
-    cfg = get_web_auth_credentials()
-    if not secrets.compare_digest(username, cfg["username"] or ""):
+    # Сравниваем логин со всеми пользователями, не выходя на первом
+    # совпадении: время ответа не должно выдавать, какие логины существуют.
+    # Логин — точное, регистрозависимое совпадение (как и раньше).
+    candidate = None
+    for user in get_web_users():
+        if secrets.compare_digest(username.encode("utf-8"), user["username"].encode("utf-8")):
+            candidate = user
+    if candidate is None:
         return False
-    return _verify_password(password, cfg.get("password_hash"), cfg.get("password"))
+    return _verify_password(password, candidate.get("password_hash"), candidate.get("password"))
 
 
 # =============================================================================
@@ -215,7 +222,8 @@ def get_current_user(request: Request) -> str:
     session_id = request.cookies.get("session_id")
     if session_id:
         username = validate_session(session_id)
-        if username:
+        # пользователя могли убрать из auth.yaml — его сессии больше не в силе
+        if username and any(u["username"] == username for u in get_web_users()):
             return username
 
     auth_header = request.headers.get("Authorization", "")

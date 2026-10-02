@@ -48,9 +48,9 @@ class TestBasicAuthWithHash:
     @pytest.fixture
     def hashed_credentials(self, mocker):
         mocker.patch.object(
-            auth, "get_web_auth_credentials",
-            return_value={"username": "admin", "password": None,
-                          "password_hash": _hash("hashed_pw")},
+            auth, "get_web_users",
+            return_value=[{"username": "admin", "password": None,
+                           "password_hash": _hash("hashed_pw")}],
         )
 
     def _basic(self, user, password):

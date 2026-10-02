@@ -1,11 +1,27 @@
 # Конфигурация аутентификации OpenVPN LogServer
 # Скопируйте в auth.yaml и установите свои значения.
 # auth.yaml в git не коммитится (см. .gitignore).
+#
+# Пользователей может быть несколько: основная пара username/password_hash
+# (обычно админ веб-интерфейса; её же перекрывают ENV WEB_AUTH_*) плюс
+# список users. Ролей нет — логсервер только читает данные, любой
+# пользователь видит всё. Отдельные учётки нужны, чтобы внешним системам
+# (инвентаризация ARMS, скрипты) выдавать свои пароли и отзывать их, не
+# трогая админский. Логины регистрозависимые и не должны повторяться.
+#
+# bcrypt-хеш пароля сгенерировать:
+#   python3 -c "import bcrypt; print(bcrypt.hashpw(b'your_password', bcrypt.gensalt()).decode())"
 
 auth:
   web:
-    # Имя пользователя для Basic Auth.
+    # Основной пользователь (Basic Auth и вход в веб-интерфейс).
     username: admin
-    # bcrypt-хеш пароля. Сгенерировать:
-    #   python3 -c "import bcrypt; print(bcrypt.hashpw(b'your_password', bcrypt.gensalt()).decode())"
     password_hash: "$2b$12$REPLACE_ME_WITH_BCRYPT_HASH"
+
+    # Дополнительные пользователи. Удалённый из списка пользователь теряет
+    # доступ после перезапуска web, в том числе уже открытые сессии.
+    #users:
+    #  - username: arms        # инвентаризация ARMS (integrations/arms)
+    #    password_hash: "$2b$12$REPLACE_ME_WITH_BCRYPT_HASH"
+    #  - username: auditor
+    #    password_hash: "$2b$12$REPLACE_ME_WITH_BCRYPT_HASH"

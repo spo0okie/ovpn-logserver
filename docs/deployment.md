@@ -161,6 +161,10 @@ journalctl -u openvpn@server -f
 Отредактируйте `config/auth.yaml`:
 - `username` и `password_hash` (bcrypt) для доступа к Web UI.
   Plaintext-поле `password` поддержано как legacy и выводит предупреждение.
+- `users` — дополнительные пользователи, у каждого свой `username` и
+  `password_hash`. Например, отдельная учётка для инвентаризации ARMS
+  ([integrations/arms/README.md](../integrations/arms/README.md)). Подробности —
+  [config/README.md](../config/README.md#authyaml--вход-в-веб-интерфейс).
   Сгенерировать хеш:
   `python3 -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"`
 
