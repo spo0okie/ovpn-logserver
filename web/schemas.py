@@ -314,6 +314,65 @@ class ServersResponse(BaseModel):
 
 
 # =============================================================================
+# Integration схемы (внешние системы: инвентаризация ARMS)
+# =============================================================================
+
+class IntegrationStatusQuery(BaseModel):
+    """Пара «CN + инстанс»; server=None — любой инстанс."""
+
+    cn: str
+    server: Optional[str] = None
+
+
+class IntegrationStatusRequest(BaseModel):
+    """Батч пар: одна страница внешней системы — один запрос."""
+
+    items: List[IntegrationStatusQuery] = Field(..., max_length=500)
+
+
+class IntegrationSession(BaseModel):
+    """Сессия в ответе статуса (текущая или последняя)."""
+
+    id: int
+    server_name: Optional[str] = None  # NULL — legacy-сессии до мультисайта
+    status: str
+    connected_at: datetime
+    disconnected_at: Optional[datetime] = None
+    source_ip: str
+    virtual_ip: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
+
+
+class IntegrationCertificates(BaseModel):
+    """Сводка сертификатов CN."""
+
+    total: int
+    active: int  # не отозван и не истёк
+    revoked: int
+    expired: int  # истёк, но не отозван
+    valid_to: Optional[datetime] = None  # срок самого долгого действующего
+
+
+class IntegrationStatusItem(BaseModel):
+    """Статус пары: online > enabled > disabled > revoked; not_found — CN нет."""
+
+    cn: str
+    server: Optional[str] = None
+    state: str
+    has_ccd: bool = False
+    certificates: Optional[IntegrationCertificates] = None
+    active_session: Optional[IntegrationSession] = None
+    last_session: Optional[IntegrationSession] = None
+
+
+class IntegrationStatusResponse(BaseModel):
+    """Ответ батч-статуса — в порядке запроса."""
+
+    data: List[IntegrationStatusItem]
+
+
+# =============================================================================
 # Error схемы
 # =============================================================================
 

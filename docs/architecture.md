@@ -35,6 +35,57 @@ OpenVPN ──(script-hooks)──> collector ──> MySQL <── web (FastAPI
 **Границы**: collector пишет, web API читает, БД — единственное хранилище
 состояния. Список инвариантов — [invariants.md](invariants.md).
 
+## Узлы: что это и где настраивается
+
+Узел — это процесс. Один хост может нести любой их набор, конфиги просто
+складываются.
+
+- **MySQL** — одна база на всю систему, общая для всех узлов.
+- **web** (FastAPI) — один на систему.
+  - `config/database.yaml` — подключение к БД;
+  - `config/auth.yaml` — вход в UI; `config/web.yaml` — `debug` и CORS;
+  - systemd: `openvpn-web.service`.
+- **Синк роли `central`** (`cert_sync` + `crl_checker`) — один на хост, где лежит CA.
+  - `config/openvpn.yaml`: `certs_dir`, `cert_extension`, `crl_file`;
+  - systemd: `openvpn-sync.service` + `.timer` с `Environment=SYNC_ROLE=central`.
+- **Хуки** (`client-connect` / `client-disconnect`) — **свой набор на каждый инстанс OpenVPN**.
+  - `server.conf` инстанса: `script-security 2`, обе директивы хуков,
+    `setenv OPENVPN_SERVER_NAME <имя>`;
+  - БД берут из `config/database.yaml`; пути PKI и CCD не читают вовсе.
+- **Синк роли `site`** (`ccd_checker` + `session_cleanup`) — **по одному на каждый инстанс OpenVPN**.
+  - `/etc/openvpn-logserver/<имя>.env`: `OPENVPN_SERVER_NAME`, `OPENVPN_CCD_DIR`,
+    `OPENVPN_MGMT_SOCKET`, `SYNC_LOCK_PATH` (образец — `systemd/site.env.example`);
+  - systemd: `openvpn-sync-site@<имя>.timer`.
+
+**Пара `.service` + `.timer`.** `.timer` — это только расписание; запускает он
+одноимённый `.service` (`openvpn-sync.timer` → `openvpn-sync.service`, связь по
+имени файла). Поэтому копировать в `/etc/systemd/system/` надо **оба** файла, а
+`systemctl enable --now` — только для таймера. У синков `.service` объявлен
+`Type=oneshot` и намеренно без `[Install]`: сам при загрузке он не стартует,
+его дёргает таймер; запустить разово вручную можно
+`systemctl start openvpn-sync-site@vpn1`. `openvpn-web.service` — долгоживущий
+процесс, таймера у него нет и включается он напрямую.
+
+⚠️ **`config/openvpn.yaml` — конфиг одного процесса, а не список серверов.**
+Списка серверов нет нигде: он складывается сам в таблице `vpn_servers` из имён,
+с которыми пришли хуки и синки. Поэтому при двух и более инстансах на хосте
+инстанс-специфичные ключи (`server_name`, `ccd_dir`, `management_socket`) в
+`openvpn.yaml` не пишут — они приходят из `server.conf` и env-файла инстанса.
+В `openvpn.yaml` тогда остаются только общие для хоста пути CA (`certs_dir`,
+`cert_extension`, `crl_file`).
+
+### Пример: один хост — CA, web и два инстанса OpenVPN
+
+| Узел | Где настраивается |
+|---|---|
+| web | `config/database.yaml`, `config/auth.yaml`, `config/web.yaml`; `openvpn-web.service` |
+| синк `central` | `config/openvpn.yaml` (`certs_dir`, `cert_extension`, `crl_file`); `openvpn-sync.timer` + drop-in `SYNC_ROLE=central` |
+| инстанс `vpn1` | `server.conf`: хуки + `setenv OPENVPN_SERVER_NAME vpn1`; `/etc/openvpn-logserver/vpn1.env`; `openvpn-sync-site@vpn1.timer` |
+| инстанс `vpn2` | то же с именем `vpn2` (свои `OPENVPN_CCD_DIR`, `OPENVPN_MGMT_SOCKET`, `SYNC_LOCK_PATH`) |
+
+Итого на таком хосте: три таймера (`central`, `site@vpn1`, `site@vpn2`), один
+каталог `/opt/openvpn-logserver` и один набор `config/*.yaml`.
+
 ## Мультисайт
 
 Тот же набор компонентов разносится по ролям хостов: на админ-хосте с CA —

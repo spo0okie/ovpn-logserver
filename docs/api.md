@@ -20,6 +20,7 @@
 | `GET /api/v1/stats/overview` | сводные метрики |
 | `GET /api/v1/stats/connections` | подключения по периодам |
 | `GET /api/v1/stats/geography` | распределение по странам |
+| `POST /api/v1/integrations/status` | батч-статус пар «CN + инстанс» для внешних систем |
 | `GET /health` | проверка живости, без аутентификации |
 
 Вне `/api/v1`, но полезно знать: `GET /sessions/export/csv` — выгрузка журнала
@@ -127,6 +128,50 @@ is_active, source_ip, country, city}`.
 ⚠️ `active_certs` считается по-разному: в `stats/overview` это «не отозван»
 (истёкшие тоже попадают), в `/accounts` и `/accounts/{cn}` — «не отозван **и**
 не истёк». Совпадать значения не обязаны.
+
+## Статус для интеграций
+
+`POST /api/v1/integrations/status` — для внешних систем, которым нужен статус
+VPN сразу у многих объектов (инвентаризация ARMS рисует его у каждого
+IP-адреса страницы: [integrations/arms/README.md](../integrations/arms/README.md)).
+Одна страница — один запрос. Метод POST только ради тела со списком пар; данные
+не меняются.
+
+Запрос: `{"items": [{"cn": "ivanov", "server": "local"}, ...]}`, не более 500 пар
+(больше — 422). `server` — имя инстанса (`vpn_servers.name`), `null` или
+отсутствие — «любой инстанс». CN сопоставляется без учёта регистра.
+
+Ответ `{"data": [...]}` — в порядке запроса, по элементу на пару:
+
+```json
+{
+  "cn": "ivanov", "server": "local",
+  "state": "online",
+  "has_ccd": true,
+  "certificates": {"total": 2, "active": 1, "revoked": 1, "expired": 0,
+                   "valid_to": "2027-03-01T00:00:00"},
+  "active_session": {"id": 10, "server_name": "local", "status": "active",
+                     "connected_at": "...", "disconnected_at": null,
+                     "source_ip": "203.0.113.5", "virtual_ip": "10.8.0.10",
+                     "country": "Russia", "city": "Chelyabinsk"},
+  "last_session": { "...": "та же форма" }
+}
+```
+
+`state` — первый подходящий по порядку:
+
+| state | Условие |
+|---|---|
+| `online` | есть активная сессия на инстансе (важнее сертификата: CRL мог ещё не доехать) |
+| `enabled` | есть действующий (не отозван, не истёк) сертификат и CCD на инстансе |
+| `disabled` | действующий сертификат есть, CCD на инстансе нет |
+| `revoked` | действующих сертификатов нет — отозваны или истекли (различить по `certificates`) |
+| `not_found` | сертификатов с таким CN нет; остальные поля пустые |
+
+`last_session` — самая свежая сессия на инстансе по всем сертификатам CN (у
+онлайн-пары совпадает с `active_session`). Legacy-сессии (`server_id IS NULL`)
+к конкретному инстансу не относятся и видны только при `server: null`.
+`certificates.valid_to` — срок самого долгоживущего действующего сертификата.
 
 ## Известные заглушки
 

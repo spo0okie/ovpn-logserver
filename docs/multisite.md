@@ -36,17 +36,21 @@ MySQL один, центральный. Хуки fail-open (I4.5): недост�
 
 ## Идентичность сервера
 
-Каждый **инстанс** OpenVPN (2FA-инстанс — отдельно!) имеет имя в конфигурации:
+Каждый **инстанс** OpenVPN (2FA-инстанс — отдельно!) имеет имя
+`OPENVPN_SERVER_NAME`. По нему collector сам заводит запись в таблице
+`vpn_servers` — руками её создавать не нужно, и списка серверов нигде в
+конфигах нет.
 
-```yaml
-# config/openvpn.yaml на сервере сайта (или ENV OPENVPN_SERVER_NAME)
-openvpn:
-  server_name: chl        # у 2FA-инстанса того же хоста: chl-2fa
-```
+Имя задаётся в двух местах, и значения обязаны совпадать:
 
-По этому имени collector автоматически регистрирует запись в таблице
-`vpn_servers` — руками её заводить не нужно. Дефолт `local` оставляет
-single-site установку рабочей без правки конфига.
+- хукам — `setenv OPENVPN_SERVER_NAME chl` в `server.conf` этого инстанса;
+- синку — в env-файле инстанса `/etc/openvpn-logserver/chl.env`.
+
+Если инстанс на хосте **один**, имя можно вместо этого положить в
+`config/openvpn.yaml` (`server_name`); дефолт `local` оставляет single-site
+установку рабочей без правки конфига. При двух и более инстансах так нельзя:
+`openvpn.yaml` один на каталог проекта и описывает один процесс. Карта узлов —
+[architecture.md](architecture.md#узлы-что-это-и-где-настраивается).
 
 ## Изменения схемы БД (миграция 005)
 
@@ -135,13 +139,9 @@ database:
   password: "..."
 ```
 
-```yaml
-# config/openvpn.yaml — пути этого сайта
-openvpn:
-  ccd_dir: /etc/openvpn/mobile/ccd          # remoteCcdDir из provision
-  management_socket: /run/openvpn/mgmt-chl.sock
-  server_name: chl                          # имя ЭТОГО инстанса
-```
+Всё остальное — имя инстанса, CCD-каталог и mgmt-сокет — задаётся не в
+`config/openvpn.yaml`, а снаружи: в `server.conf` инстанса и в его env-файле
+(ниже). Так процедура одинакова и для одного, и для двух инстансов на хосте.
 
 `config/auth.yaml` и `web.yaml` на сайте не нужны (web не запускается).
 
@@ -171,35 +171,31 @@ client-disconnect /etc/openvpn/scripts/client-disconnect
 оставить обе, либо обернуть оба вызова одним скриптом. Ненулевой exit любого
 client-connect блокирует подключение — хуки logserver гарантируют exit 0 (I4.5).
 
-Периодическая синхронизация сайта (ccd_checker + session_cleanup):
-
-```ini
-# /etc/systemd/system/openvpn-sync-site.service
-[Unit]
-Description=OpenVPN LogServer site sync (ccd + cleanup)
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/openvpn-logserver
-ExecStart=/opt/openvpn-logserver/venv/bin/python collector/sync_all.py --role site
-
-# /etc/systemd/system/openvpn-sync-site.timer
-[Unit]
-Description=OpenVPN LogServer site sync timer
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-[Install]
-WantedBy=timers.target
-```
+Периодическая синхронизация (ccd_checker + session_cleanup) — шаблонный юнит
+из репозитория плюс env-файл инстанса; имя env-файла = имя инстанса = `%i`:
 
 ```bash
-sudo systemctl enable --now openvpn-sync-site.timer
+sudo cp systemd/openvpn-sync-site@.service systemd/openvpn-sync-site@.timer /etc/systemd/system/
+sudo mkdir -p /etc/openvpn-logserver
+sudo cp systemd/site.env.example /etc/openvpn-logserver/chl.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now openvpn-sync-site@chl.timer
+```
+
+`/etc/openvpn-logserver/chl.env`:
+
+```bash
+OPENVPN_SERVER_NAME=chl
+OPENVPN_CCD_DIR=/etc/openvpn/mobile/ccd              # = client-config-dir
+OPENVPN_MGMT_SOCKET=/run/openvpn/mgmt-chl.sock       # = management ... unix
+SYNC_LOCK_PATH=/var/run/openvpn-logserver/sync-chl.lock
 ```
 
 Проверка: в UI появились сессии с именем сервера; `SELECT * FROM vpn_servers;`
-содержит `chl`; `ccd_status` наполнился; cleanup в логе
-(`/var/log/openvpn-logserver/session-cleanup.log`) видит клиентов mgmt.
+содержит `chl`; `ccd_status` наполнился; `journalctl -u openvpn-sync-site@chl`
+без ошибок. Опечатка в `OPENVPN_CCD_DIR` — предупреждение в `ccd-checker.log`
+(статусы CCD не трогаются), опечатка в `OPENVPN_MGMT_SOCKET` — «MGMT returned 0
+clients … skipping cleanup» в `session-cleanup.log` при нулевом коде возврата.
 
 ## Два инстанса OpenVPN на одном хосте (обычный + 2FA)
 

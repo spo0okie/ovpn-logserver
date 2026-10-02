@@ -50,8 +50,9 @@ alembic -c database/alembic.ini revision -m "описание"
   - `mgmt_client.py` — чтение management-сокета OpenVPN (список живых клиентов для orphan-detection).
   - `server_registry.py` — регистрация инстанса в `vpn_servers` по имени и единое правило скоупа сессий по серверу (`session_scope_clause`).
 - **`core/`** — `models.py` (SQLAlchemy: Account, Session, VpnServer, CcdStatus, GeoIPCache), `database.py` (engine/SessionLocal), `config.py` (загрузка конфигов), `time.py` (naive-UTC), `geoip.py` (ip-api.com), `serial.py` (нормализация серийников).
-- **`web/`** — FastAPI: `api/{accounts,sessions,stats,servers}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
+- **`web/`** — FastAPI: `api/{accounts,sessions,stats,servers,integrations}.py` (REST под `/api/v1`, Basic Auth через `Depends(get_current_user)`), `routes/pages.py` (HTML-страницы), `auth.py`, `schemas.py`.
 - **`database/`** — Alembic (`alembic.ini`, `migrations/`) и `init.sql`.
+- **`integrations/arms/`** — PHP-провайдер для механизма интеграций инвентаризации ARMS (`../../arms`). Поставляется с логсервером, а не с ARMS: инстанс ARMS подключает его через `require_once .../autoload.php` в своём `params-local.php`. Данные берёт из `POST /api/v1/integrations/status` (`web/api/integrations.py`), поэтому ответ этого эндпоинта — контракт с провайдером: меняются они согласованно. Тест провайдера гоняется в окружении ARMS (см. README каталога).
 
 ## Конфигурация
 

@@ -16,6 +16,9 @@
 - **Несколько OpenVPN-серверов** с общим CA (мультисайт) — сессии и CCD
   привязаны к серверу, веб-интерфейс и БД общие. См. [docs/multisite.md](docs/multisite.md).
 - **REST API** под `/api/v1` и веб-интерфейс на Jinja2 + Bootstrap.
+- **Интеграция с инвентаризацией ARMS** (подключается отдельно) — статус
+  VPN-клиента у его IP-адреса в инвентаризации. См.
+  [integrations/arms/README.md](integrations/arms/README.md).
 
 ## Как это работает
 
@@ -90,6 +93,7 @@ ENUM и внешним ключам локально не ловятся.
 | [timezone.md](docs/timezone.md) | как хранится и отображается время |
 | [known-gaps.md](docs/known-gaps.md) | что заявлено, но не работает |
 | [connection-attempts.md](docs/connection-attempts.md) | почему не собираются неудачные попытки |
+| [integrations/arms/README.md](integrations/arms/README.md) | провайдер для инвентаризации ARMS: подключение и тесты |
 
 Перед изменением кода стоит заглянуть в `invariants.md`: часть требований
 неочевидна, а их нарушение ломает VPN или портит журнал. Самый жёсткий пример —
