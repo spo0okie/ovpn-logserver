@@ -14,9 +14,9 @@ WorkingDirectory=/opt/openvpn-logserver
 Environment=PYTHONPATH=/opt/openvpn-logserver
 # Пароль БД больше не требуется в переменных окружения - читается из config/database.yaml
 
-# Запуск напрямую через uvicorn (без venv).
+# uvicorn из venv (зависимости ставятся туда — docs/deployment.md).
 # 127.0.0.1: приложение не имеет TLS, наружу — только через reverse proxy.
-ExecStart=uvicorn web.main:app \
+ExecStart=/opt/openvpn-logserver/venv/bin/uvicorn web.main:app \
     --host 127.0.0.1 \
     --port 8000 \
     --workers 2

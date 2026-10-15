@@ -35,17 +35,19 @@ OpenVPN. Для нескольких OpenVPN-серверов с централ�
 ```bash
 # Установка зависимостей
 apt update
-apt install -y python3 python3-pip mysql-server git
+apt install -y python3 python3-venv python3-pip mysql-server git
 
 # Клонирование репозитория
 cd /opt
 git clone <repository-url> openvpn-logserver
 cd openvpn-logserver
 
-# Установка Python зависимостей
-pip install -r database/requirements.txt
-pip install -r web/requirements.txt
-pip install -r collector/requirements.txt
+# Установка Python зависимостей — в venv. Системный pip на Debian 12+/
+# Ubuntu 23.04+ откажет с "externally-managed-environment" (PEP 668)
+python3 -m venv venv
+venv/bin/pip install -r database/requirements.txt
+venv/bin/pip install -r web/requirements.txt
+venv/bin/pip install -r collector/requirements.txt
 
 # Настройка базы данных
 mysql -u root -p <<EOF
@@ -55,8 +57,8 @@ GRANT ALL PRIVILEGES ON openvpn_logs.* TO 'openvpn_user'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# Применение миграций
-cd database && alembic upgrade head && cd ..
+# Миграции применяются позже, в шаге 4: alembic берёт подключение из
+# config/database.yaml, который ещё не заполнен
 
 # Конфигурация: заполнить config/*.yaml в каталоге проекта.
 # ВАЖНО: core/config.py читает ТОЛЬКО <каталог проекта>/config —
@@ -89,13 +91,15 @@ OpenVPN вызывает не сами `collector/client_connect.py`/`client_dis
 ```bash
 mkdir -p /etc/openvpn/scripts
 cp collector/openvpn_scripts/client-connect collector/openvpn_scripts/client-disconnect /etc/openvpn/scripts/
+sed -i '1s|.*|#!/opt/openvpn-logserver/venv/bin/python|' /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
 chmod 755 /etc/openvpn/scripts/client-connect /etc/openvpn/scripts/client-disconnect
 ```
 
 Путь к проекту обёртки берут из ENV `OPENVPN_LOGSERVER_PATH` (по умолчанию
-`/opt/openvpn-logserver`). Шебанг — `#!/usr/bin/env python3`, то есть системный
-Python: подходит для этой установки, где зависимости ставились глобально. Для
-установки с venv шебанг меняется — см. шаг 6 раздела с изоляцией.
+`/opt/openvpn-logserver`). Шебанг в репозитории — `#!/usr/bin/env python3`, то
+есть системный Python, а зависимости стоят в venv. Без `sed` выше хук не найдёт
+SQLAlchemy/PyMySQL: VPN продолжит работать (обёртка вернёт exit 0), но сессии
+молча не будут записываться.
 
 #### 2.2 Настройка OpenVPN
 
@@ -166,17 +170,23 @@ journalctl -u openvpn@server -f
   ([integrations/arms/README.md](../integrations/arms/README.md)). Подробности —
   [config/README.md](../config/README.md#authyaml--вход-в-веб-интерфейс).
   Сгенерировать хеш:
-  `python3 -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"`
+  `venv/bin/python -c "import bcrypt; print(bcrypt.hashpw(b'ПАРОЛЬ', bcrypt.gensalt()).decode())"`
 
 Отредактируйте `config/web.yaml`:
 - `debug: false` для прода (иначе будут открыты `/docs` и `/openapi.json`)
 - `cors.allow_origins` — список доменов; при `["*"]` CORS отключается целиком
 
-### 4. Запуск
+### 4. Миграции и запуск
+
+Применить миграции (конфиг БД к этому моменту заполнен):
+```bash
+cd /opt/openvpn-logserver
+venv/bin/python -m alembic -c database/alembic.ini upgrade head
+```
 
 **Вручную:**
 ```bash
-uvicorn web.main:app --host 0.0.0.0 --port 8000
+venv/bin/uvicorn web.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Через systemd:**

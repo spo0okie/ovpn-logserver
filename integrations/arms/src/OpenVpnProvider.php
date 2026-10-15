@@ -15,11 +15,14 @@ use yii\helpers\Html;
  * инстанс, у которого логсервера нет, о провайдере ничего не знает. Контракт
  * провайдера — docs/dev/integrations.md в репозитории ARMS.
  *
- * Привязка — по имени IP-записи. Provision логсервера заводит VPN-адрес
+ * Привязка — по имени IP-записи и её адресу. Provision заводит VPN-адрес
  * клиента в инвентаризации под именем `<префикс><CN>` (`ovpn-ivanov`,
- * `ovpn2fa-ivanov`), и префикс однозначно называет инстанс OpenVPN. Поэтому
- * отдельно помечать VPN-сети не нужно: провайдер применим к IP, чьё имя
- * начинается с известного префикса.
+ * `ovpn2fa-ivanov`): провайдер применим к IP, чьё имя начинается с известного
+ * префикса, а остаток имени — CN. Инстанс OpenVPN определяется:
+ * - по подсети адреса (`networks`) — у каждого инстанса VPN-сеть своя, поэтому
+ *   это работает и там, где одни и те же префиксы используются на многих
+ *   инстансах (мультисайт);
+ * - если адрес не попал ни в одну из `networks` — по префиксу (`prefixes`).
  *
  * Что даёт (статус пары «CN + инстанс»: online → enabled → disabled →
  * revoked → not found, docs/api.md логсервера):
@@ -44,9 +47,14 @@ use yii\helpers\Html;
  *             'user' => '...',                  //учётка логсервера (config/auth.yaml)
  *             'password' => '...',
  *             //префикс имени IP-записи => имя инстанса (openvpn.server_name
- *             //логсервера); null - любой инстанс. По умолчанию - соглашение
- *             //provision для одиночного инстанса:
+ *             //логсервера); null - любой инстанс, false - префикс только
+ *             //отделяет CN, а инстанс задаёт подсеть (адрес вне networks -
+ *             //не VPN-адрес). По умолчанию - соглашение provision для
+ *             //одиночного инстанса:
  *             //'prefixes' => ['ovpn-' => 'local', 'ovpn2fa-' => 'local-2fa'],
+ *             //VPN-подсеть => имя инстанса; приоритетнее префикса. При
+ *             //вложенных подсетях берётся самая узкая:
+ *             //'networks' => ['10.5.0.0/24' => 'chl', '10.105.0.0/24' => 'chl-2fa'],
  *             //'web' => 'https://vpnlog.corp',  //адрес для браузера, если отличается от url
  *             //'title' => 'OpenVPN',
  *             //'expiringDays' => 30,            //предупреждать о сертификате, истекающем раньше
@@ -98,20 +106,22 @@ class OpenVpnProvider extends IntegrationProvider
 	}
 
 	/**
-	 * Привязка «инстанс|CN» из имени IP-записи.
+	 * Привязка «инстанс|CN» из имени и адреса IP-записи.
 	 * Длинный префикс проверяется первым: при префиксах `ovpn-` и
 	 * `ovpn-2fa-` запись `ovpn-2fa-ivanov` относится ко второму.
 	 */
 	public function binding(ArmsModel $model): ?string
 	{
-		$pair = $this->parseName((string)($model->name ?? ''));
+		$pair = $this->parseName((string)($model->name ?? ''), (string)($model->text_addr ?? ''));
 		return $pair ? $pair['server'].'|'.$pair['cn'] : null;
 	}
 
 	/**
-	 * Имя IP-записи -> ['cn' =>, 'server' =>] или null (не VPN-адрес)
+	 * Имя (и адрес) IP-записи -> ['cn' =>, 'server' =>] или null (не VPN-адрес).
+	 * CN — имя без префикса; инстанс — по подсети адреса, а если адрес ни в
+	 * одну из `networks` не попал — по префиксу.
 	 */
-	public function parseName(string $name): ?array
+	public function parseName(string $name, string $addr = ''): ?array
 	{
 		$name = trim($name);
 		$prefixes = $this->prefixes();
@@ -120,6 +130,12 @@ class OpenVpnProvider extends IntegrationProvider
 			if ($prefix === '' || strncmp($name, $prefix, strlen($prefix)) !== 0) continue;
 			$cn = substr($name, strlen($prefix));
 			if ($cn === '') return null;
+			$network = $this->addrNetwork($addr);
+			if (!is_null($network)) {
+				$server = $this->networks()[$network];
+			} elseif ($server === false) {
+				return null; //инстанс задаётся только подсетью, а адрес не из VPN-сетей
+			}
 			return ['cn' => $cn, 'server' => (string)$server];
 		}
 		return null;
@@ -128,6 +144,37 @@ class OpenVpnProvider extends IntegrationProvider
 	public function prefixes(): array
 	{
 		return $this->config['prefixes'] ?? static::DEFAULT_PREFIXES;
+	}
+
+	/** VPN-подсети инстансов: ['10.5.0.0/24' => 'chl', ...] */
+	public function networks(): array
+	{
+		return $this->config['networks'] ?? [];
+	}
+
+	/**
+	 * Подсеть из `networks`, которой принадлежит адрес (самая узкая из
+	 * подходящих), или null. Адрес — как в IP-записи: возможно, с маской.
+	 */
+	public function addrNetwork(string $addr): ?string
+	{
+		$ip = ip2long(explode('/', trim($addr))[0]);
+		if ($ip === false) return null;
+
+		$found = null;
+		$foundBits = -1;
+		foreach (array_keys($this->networks()) as $cidr) {
+			$tokens = explode('/', (string)$cidr);
+			$net = ip2long($tokens[0]);
+			$bits = (int)($tokens[1] ?? 32);
+			if ($net === false || $bits < 0 || $bits > 32 || $bits <= $foundBits) continue;
+			$mask = $bits ? (-1 << (32 - $bits)) & 0xFFFFFFFF : 0;
+			if (($ip & $mask) === ($net & $mask)) {
+				$found = (string)$cidr;
+				$foundBits = $bits;
+			}
+		}
+		return $found;
 	}
 
 	/** Привязка -> ['cn' =>, 'server' => string|null] */

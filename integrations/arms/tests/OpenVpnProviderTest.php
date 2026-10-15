@@ -64,11 +64,12 @@ class OpenVpnProviderTest extends Unit
 		return $provider;
 	}
 
-	private function makeIp(int $id, ?string $name): NetIps
+	private function makeIp(int $id, ?string $name, ?string $addr = null): NetIps
 	{
 		$ip = new NetIps();
 		$ip->id = $id;
 		$ip->name = $name;
+		$ip->text_addr = $addr;
 		return $ip;
 	}
 
@@ -101,6 +102,42 @@ class OpenVpnProviderTest extends Unit
 		$this->assertSame('msk-2fa|petrov', $provider->binding($this->makeIp(6, 'vpn-2fa-petrov')));
 		$this->assertSame('msk|petrov', $provider->binding($this->makeIp(7, 'vpn-petrov')));
 		$this->assertSame('|petrov', $provider->binding($this->makeIp(8, 'any-petrov')), 'любой инстанс');
+	}
+
+	/**
+	 * Мультисайт: префиксы на всех сайтах одинаковые, инстанс определяет
+	 * подсеть адреса; префикс — запасной вариант для адресов вне networks
+	 */
+	public function testBindingByNetwork()
+	{
+		$networks = [
+			'10.5.0.0/24' => 'chl', '10.105.0.0/24' => 'chl-2fa',
+			'10.13.0.0/24' => 'msk',
+			'10.20.0.0/16' => 'wide', '10.20.7.0/24' => 'narrow',
+		];
+		$provider = $this->makeProvider([], ['networks' => $networks]);
+		$this->assertSame('chl|ivanov', $provider->binding($this->makeIp(1, 'ovpn-ivanov', '10.5.0.7')));
+		$this->assertSame('chl-2fa|ivanov', $provider->binding($this->makeIp(2, 'ovpn2fa-ivanov', '10.105.0.7')));
+		$this->assertSame('msk|ivanov', $provider->binding($this->makeIp(3, 'ovpn-ivanov', '10.13.0.7')));
+		$this->assertSame('chl-2fa|ivanov', $provider->binding($this->makeIp(4, 'ovpn-ivanov', '10.105.0.7')),
+			'подсеть приоритетнее префикса');
+		$this->assertSame('msk|ivanov', $provider->binding($this->makeIp(5, 'ovpn-ivanov', '10.13.0.7/24')),
+			'адрес с маской');
+		$this->assertSame('narrow|ivanov', $provider->binding($this->makeIp(6, 'ovpn-ivanov', '10.20.7.1')),
+			'самая узкая из вложенных подсетей');
+		$this->assertSame('wide|ivanov', $provider->binding($this->makeIp(7, 'ovpn-ivanov', '10.20.8.1')));
+		$this->assertSame('local|ivanov', $provider->binding($this->makeIp(8, 'ovpn-ivanov', '192.168.1.5')),
+			'адрес вне networks — инстанс по префиксу');
+		$this->assertNull($provider->binding($this->makeIp(9, 'printer', '10.5.0.20')), 'имя без префикса — не VPN-адрес');
+
+		//false: префикс только отделяет CN, без подсети адрес к VPN не относится
+		$provider = $this->makeProvider([], [
+			'networks' => $networks,
+			'prefixes' => ['ovpn-' => false, 'ovpn2fa-' => false],
+		]);
+		$this->assertSame('chl-2fa|ivanov', $provider->binding($this->makeIp(10, 'ovpn2fa-ivanov', '10.105.0.7')));
+		$this->assertNull($provider->binding($this->makeIp(11, 'ovpn-ivanov', '192.168.1.5')));
+		$this->assertFalse($provider->appliesTo($this->makeIp(12, 'ovpn-ivanov', null)));
 	}
 
 	public function testAppliesTo()

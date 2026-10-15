@@ -18,10 +18,9 @@ Environment=PYTHONPATH=/opt/openvpn-logserver
 Environment=SYNC_ROLE=all
 
 # Запуск через отдельный Python-скрипт
-# Интерпретатор: системный python3 — как в «быстром старте» docs/deployment.md,
-# где зависимости ставятся глобально. При установке в venv заменить на
-# /opt/openvpn-logserver/venv/bin/python
-ExecStart=/usr/bin/python3 /opt/openvpn-logserver/collector/sync_all.py
+# Интерпретатор venv: зависимости ставятся туда (docs/deployment.md) —
+# системный pip на Debian 12+ глобальную установку не допускает (PEP 668)
+ExecStart=/opt/openvpn-logserver/venv/bin/python /opt/openvpn-logserver/collector/sync_all.py
 
 # [Install] намеренно нет: юнит запускает таймер (openvpn-sync.timer).
 # `systemctl enable openvpn-sync.service` добавил бы лишний запуск при загрузке.
